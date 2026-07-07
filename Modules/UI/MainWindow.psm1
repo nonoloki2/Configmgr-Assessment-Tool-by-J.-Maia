@@ -24,7 +24,7 @@ function Show-CATMainWindow {
                 </Grid.ColumnDefinitions>
                 <StackPanel Grid.Column="0">
                     <TextBlock Text="ConfigMgr Assessment Tool by J. Maia" FontSize="24" FontWeight="SemiBold" Foreground="#222"/>
-                    <TextBlock Name="txtVersion" Text="Version 1.1.1-alpha | Build 0006 | Completion UX Fixes" Margin="0,4,0,0" Foreground="#555"/>
+                    <TextBlock Name="txtVersion" Text="Version 1.1.2-alpha | Build 0007 | Timer and Output Fixes" Margin="0,4,0,0" Foreground="#555"/>
                     <TextBlock Name="txtAssessmentID" Text="Assessment ID:" Margin="0,8,0,0" Foreground="#555"/>
                 </StackPanel>
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top">
@@ -158,7 +158,7 @@ function Show-CATMainWindow {
         $elapsed = (Get-Date) - $Session.StartTime
         $ui.txtElapsed.Text = 'Elapsed: {0:hh\:mm\:ss}' -f $elapsed
     })
-    $timer.Start()
+    # Timer starts only while Discovery is running. It is intentionally stopped when the run finishes.
 
     function Add-UiLog([string]$Message,[string]$Level='INFO') {
         $line = '{0} [{1}] {2}' -f (Get-Date -Format 'HH:mm:ss'), $Level, $Message
@@ -171,6 +171,17 @@ function Show-CATMainWindow {
         $ui.txtCurrentTask.Text = $text
         $ui.txtCurrentTask.ToolTip = $text
         $ui.statusLeft.Text = $Message
+    }
+
+    function Get-CATOutputFolderForUi {
+        if ($Session.LastCsvPath -and (Test-Path -LiteralPath $Session.LastCsvPath)) {
+            return (Split-Path -Parent $Session.LastCsvPath)
+        }
+        $defaultOutput = Join-Path $Session.AppRoot 'Output'
+        if (-not (Test-Path -LiteralPath $defaultOutput)) {
+            New-Item -ItemType Directory -Path $defaultOutput -Force | Out-Null
+        }
+        return $defaultOutput
     }
 
 
@@ -213,6 +224,10 @@ function Show-CATMainWindow {
 
     $ui.btnDiscovery.Add_Click({
         try {
+            $Session.StartTime = Get-Date
+            $ui.txtElapsed.Text = 'Elapsed: 00:00:00'
+            $timer.Stop()
+            $timer.Start()
             $ui.btnDiscovery.IsEnabled = $false
             $ui.btnExport.IsEnabled = $false
             $ui.btnOpenOutput.IsEnabled = $false
@@ -234,6 +249,8 @@ function Show-CATMainWindow {
             $serverCount = @($Session.Inventory.Servers).Count
             $roleCount = @($Session.Inventory.Roles).Count
             $elapsed = (Get-Date) - $Session.StartTime
+            $timer.Stop()
+            $ui.txtElapsed.Text = 'Elapsed: {0:hh\:mm\:ss}' -f $elapsed
             $summary = 'Discovery completed successfully | Servers: {0} | Roles: {1} | CSV exported | Elapsed: {2:hh\:mm\:ss}' -f $serverCount, $roleCount, $elapsed
             $ui.txtHeaderStatus.Text = 'Completed'
             $ui.txtHeaderStatus.Foreground = 'Green'
@@ -245,6 +262,7 @@ function Show-CATMainWindow {
             $ui.txtDebug.Text = "AssessmentID: $($Session.AssessmentID)`r`nLogFile: $($Session.LogFile)`r`nCSV: $csv`r`nServers: $serverCount`r`nRoles: $roleCount`r`nElapsed: $($elapsed.ToString('hh\:mm\:ss'))"
             [System.Windows.MessageBox]::Show($summary + "`n`nCSV:`n$csv", 'Discovery completed', 'OK', 'Information') | Out-Null
         } catch {
+            $timer.Stop()
             Add-UiLog $_.Exception.Message 'ERROR'
             [System.Windows.MessageBox]::Show($_.Exception.Message, 'Discovery failed', 'OK', 'Error') | Out-Null
             Refresh-Results
@@ -266,7 +284,21 @@ function Show-CATMainWindow {
         } catch { [System.Windows.MessageBox]::Show($_.Exception.Message, 'Export failed', 'OK', 'Error') | Out-Null }
     })
 
-    $ui.btnExit.Add_Click({ $window.Close() })
+    $ui.btnOpenOutput.Add_Click({
+        try {
+            $folder = Get-CATOutputFolderForUi
+            if (-not (Test-Path -LiteralPath $folder)) {
+                New-Item -ItemType Directory -Path $folder -Force | Out-Null
+            }
+            Start-Process -FilePath explorer.exe -ArgumentList ('"{0}"' -f $folder)
+            Add-UiLog "Opened output folder: $folder"
+        } catch {
+            Add-UiLog $_.Exception.Message 'ERROR'
+            [System.Windows.MessageBox]::Show($_.Exception.Message, 'Open Output failed', 'OK', 'Error') | Out-Null
+        }
+    })
+
+    $ui.btnExit.Add_Click({ $timer.Stop(); $window.Close() })
     Add-UiLog 'Application ready.'
     [void]$window.ShowDialog()
 }

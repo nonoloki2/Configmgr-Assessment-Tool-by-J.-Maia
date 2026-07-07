@@ -1,6 +1,6 @@
 <#
  ConfigMgr Assessment Tool by J. Maia
- Version 1.1.1-alpha | Build 0006
+ Version 1.1.2-alpha | Build 0007
  Phase: Professional Foundation
 #>
 [CmdletBinding()]

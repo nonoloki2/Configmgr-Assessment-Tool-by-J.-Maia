@@ -1,6 +1,6 @@
 # Changelog
 
-## v1.1.1-alpha Build 0006
+## v1.1.2-alpha Build 0007
 
 - Added clear Discovery completion summary.
 - Added success popup after Discovery completes.
