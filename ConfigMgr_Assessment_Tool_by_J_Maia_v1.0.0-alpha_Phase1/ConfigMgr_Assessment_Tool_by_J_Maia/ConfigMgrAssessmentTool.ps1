@@ -1,5 +1,5 @@
 # ConfigMgr Assessment Tool by J. Maia
-# Version: 1.0.0-alpha - Phase 1 Fixed MVP
+# Version: 1.0.1-alpha - Phase 1 Fixed MVP
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -10,9 +10,17 @@ $Script:OutputPath = Join-Path $Script:ToolRoot 'Output'
 $Script:CsvPath = Join-Path $Script:OutputPath 'CSV'
 $Script:LogPath = Join-Path $Script:OutputPath 'Logs'
 
-foreach ($folder in @($Script:OutputPath, $Script:CsvPath, $Script:LogPath)) {
-    if (-not (Test-Path $folder)) { New-Item -ItemType Directory -Path $folder -Force | Out-Null }
+
+function Ensure-OutputFolders {
+    foreach ($folder in @($Script:OutputPath, $Script:CsvPath, $Script:LogPath)) {
+        if ([string]::IsNullOrWhiteSpace($folder)) { continue }
+        if (-not (Test-Path -LiteralPath $folder)) {
+            New-Item -ItemType Directory -Path $folder -Force | Out-Null
+        }
+    }
 }
+
+Ensure-OutputFolders
 
 Import-Module (Join-Path $Script:ModulesPath 'Common.psm1') -Force
 Import-Module (Join-Path $Script:ModulesPath 'Export.psm1') -Force
@@ -28,6 +36,7 @@ $Script:LastCsvFile = $null
 
 function Write-UiLog {
     param([string]$Message)
+    Ensure-OutputFolders
     $timestamp = (Get-Date).ToString('HH:mm:ss')
     $line = "[$timestamp] $Message"
     Add-Content -Path $Script:CurrentLogFile -Value $line -Encoding UTF8
@@ -86,6 +95,7 @@ function Run-DiscoveryButtonClick {
         $btnDiscovery.Enabled = $false
         $btnExport.Enabled = $false
         $Script:AssessmentId = ([guid]::NewGuid()).Guid.ToUpper()
+        Ensure-OutputFolders
         $Script:CurrentLogFile = Join-Path $Script:LogPath "ConfigMgr_Assessment_$((Get-Date).ToString('yyyyMMdd_HHmmss'))_$($Script:AssessmentId).log"
         $Script:Results.Clear()
         $txtLog.Clear()
@@ -142,7 +152,7 @@ function Export-ButtonClick {
 }
 
 $form = New-Object System.Windows.Forms.Form
-$form.Text = 'ConfigMgr Assessment Tool by J. Maia - v1.0.0-alpha Phase 1'
+$form.Text = 'ConfigMgr Assessment Tool by J. Maia - v1.0.1-alpha Phase 1'
 $form.Size = New-Object System.Drawing.Size(1180, 760)
 $form.StartPosition = 'CenterScreen'
 $form.MinimumSize = New-Object System.Drawing.Size(1050, 650)
@@ -159,7 +169,7 @@ $lblTitle.Location = New-Object System.Drawing.Point(15, 12)
 $form.Controls.Add($lblTitle)
 
 $lblVersion = New-Object System.Windows.Forms.Label
-$lblVersion.Text = 'Version 1.0.0-alpha | Phase 1 Fixed MVP'
+$lblVersion.Text = 'Version 1.0.1-alpha | Phase 1 Fixed MVP'
 $lblVersion.AutoSize = $true
 $lblVersion.Location = New-Object System.Drawing.Point(18, 43)
 $form.Controls.Add($lblVersion)
