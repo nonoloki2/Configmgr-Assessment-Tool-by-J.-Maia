@@ -24,7 +24,7 @@ function Show-CATMainWindow {
                 </Grid.ColumnDefinitions>
                 <StackPanel Grid.Column="0">
                     <TextBlock Text="ConfigMgr Assessment Tool by J. Maia" FontSize="24" FontWeight="SemiBold" Foreground="#222"/>
-                    <TextBlock Name="txtVersion" Text="Version 1.1.2-alpha | Build 0007 | Timer and Output Fixes" Margin="0,4,0,0" Foreground="#555"/>
+                    <TextBlock Name="txtVersion" Text="Version 1.1.3-alpha | Build 0008 | Stopwatch and Success Dialog Fixes" Margin="0,4,0,0" Foreground="#555"/>
                     <TextBlock Name="txtAssessmentID" Text="Assessment ID:" Margin="0,8,0,0" Foreground="#555"/>
                 </StackPanel>
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top">
@@ -154,9 +154,11 @@ function Show-CATMainWindow {
     $ui.statusLog.Text = "Log: $($Session.LogFile)"
     $timer = New-Object Windows.Threading.DispatcherTimer
     $timer.Interval = [TimeSpan]::FromSeconds(1)
+    $script:CATDiscoveryStopwatch = [System.Diagnostics.Stopwatch]::new()
     $timer.Add_Tick({
-        $elapsed = (Get-Date) - $Session.StartTime
-        $ui.txtElapsed.Text = 'Elapsed: {0:hh\:mm\:ss}' -f $elapsed
+        if ($script:CATDiscoveryStopwatch -and $script:CATDiscoveryStopwatch.IsRunning) {
+            $ui.txtElapsed.Text = 'Elapsed: ' + $script:CATDiscoveryStopwatch.Elapsed.ToString('hh\:mm\:ss')
+        }
     })
     # Timer starts only while Discovery is running. It is intentionally stopped when the run finishes.
 
@@ -227,6 +229,8 @@ function Show-CATMainWindow {
             $Session.StartTime = Get-Date
             $ui.txtElapsed.Text = 'Elapsed: 00:00:00'
             $timer.Stop()
+            $script:CATDiscoveryStopwatch.Reset()
+            $script:CATDiscoveryStopwatch.Start()
             $timer.Start()
             $ui.btnDiscovery.IsEnabled = $false
             $ui.btnExport.IsEnabled = $false
@@ -248,10 +252,11 @@ function Show-CATMainWindow {
             Add-UiLog "CSV exported: $csv"
             $serverCount = @($Session.Inventory.Servers).Count
             $roleCount = @($Session.Inventory.Roles).Count
-            $elapsed = (Get-Date) - $Session.StartTime
+            $script:CATDiscoveryStopwatch.Stop()
             $timer.Stop()
-            $ui.txtElapsed.Text = 'Elapsed: {0:hh\:mm\:ss}' -f $elapsed
-            $summary = 'Discovery completed successfully | Servers: {0} | Roles: {1} | CSV exported | Elapsed: {2:hh\:mm\:ss}' -f $serverCount, $roleCount, $elapsed
+            $elapsedText = $script:CATDiscoveryStopwatch.Elapsed.ToString('hh\:mm\:ss')
+            $ui.txtElapsed.Text = 'Elapsed: ' + $elapsedText
+            $summary = 'Discovery completed successfully | Servers: {0} | Roles: {1} | CSV exported | Elapsed: {2}' -f $serverCount, $roleCount, $elapsedText
             $ui.txtHeaderStatus.Text = 'Completed'
             $ui.txtHeaderStatus.Foreground = 'Green'
             Set-CurrentTaskText 'Discovery completed successfully - Ready for next action'
@@ -259,9 +264,10 @@ function Show-CATMainWindow {
             $ui.txtCompletion.Foreground = 'Green'
             $ui.progressBar.Value = 100
             $ui.btnOpenOutput.IsEnabled = $true
-            $ui.txtDebug.Text = "AssessmentID: $($Session.AssessmentID)`r`nLogFile: $($Session.LogFile)`r`nCSV: $csv`r`nServers: $serverCount`r`nRoles: $roleCount`r`nElapsed: $($elapsed.ToString('hh\:mm\:ss'))"
+            $ui.txtDebug.Text = "AssessmentID: $($Session.AssessmentID)`r`nLogFile: $($Session.LogFile)`r`nCSV: $csv`r`nServers: $serverCount`r`nRoles: $roleCount`r`nElapsed: $elapsedText"
             [System.Windows.MessageBox]::Show($summary + "`n`nCSV:`n$csv", 'Discovery completed', 'OK', 'Information') | Out-Null
         } catch {
+            if ($script:CATDiscoveryStopwatch -and $script:CATDiscoveryStopwatch.IsRunning) { $script:CATDiscoveryStopwatch.Stop() }
             $timer.Stop()
             Add-UiLog $_.Exception.Message 'ERROR'
             [System.Windows.MessageBox]::Show($_.Exception.Message, 'Discovery failed', 'OK', 'Error') | Out-Null

@@ -1,22 +1,10 @@
 # Changelog
 
+## v1.1.3-alpha Build 0008
+- Fixed false Discovery failed message after successful run.
+- Replaced elapsed time calculation with Stopwatch to avoid PowerShell TimeSpan formatting/op_Subtraction issue.
+- Final elapsed time now freezes correctly after Discovery completes.
+- Open Output retained from Build 0007.
+
 ## v1.1.2-alpha Build 0007
-
-- Added clear Discovery completion summary.
-- Added success popup after Discovery completes.
-- Added Open Output button.
-- Disabled Run Discovery during execution.
-- Improved Current task handling with tooltip.
-- Improved button state handling after completion/failure.
-- Updated version/build metadata.
-
-## v1.1.0-alpha Build 0005
-
-- Rebuilt UI with professional Grid layout.
-- Fixed textbox clipping issue for Site Code and SMS Provider.
-- Added Discovery Summary dashboard.
-- Added Topology TreeView.
-- Added structured session object and inventory model.
-- Added RuleEngine and KnowledgeBase skeleton.
-- Improved CSV export schema.
-- Improved logging folder structure and fallback safety.
+- Timer and Output fixes.

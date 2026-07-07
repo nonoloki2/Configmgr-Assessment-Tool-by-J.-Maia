@@ -34,7 +34,7 @@ The SMS Provider is often the Primary Site Server, but not always.
 - CSV: `Output\CSV`
 - Logs: `Output\Logs\yyyy\MM\dd`
 
-## Acceptance check for Build 0007
+## Acceptance check for Build 0008
 
 After clicking **Run Discovery**, the tool should end with:
 
