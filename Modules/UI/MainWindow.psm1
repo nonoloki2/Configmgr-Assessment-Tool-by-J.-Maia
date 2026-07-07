@@ -24,7 +24,7 @@ function Show-CATMainWindow {
                 </Grid.ColumnDefinitions>
                 <StackPanel Grid.Column="0">
                     <TextBlock Text="ConfigMgr Assessment Tool by J. Maia" FontSize="24" FontWeight="SemiBold" Foreground="#222"/>
-                    <TextBlock Name="txtVersion" Text="Version 1.4.0-alpha | Build 0011 | HTML Reporting Engine" Margin="0,4,0,0" Foreground="#555"/>
+                    <TextBlock Name="txtVersion" Text="Version 1.4.1-alpha | Build 0012 | HTML Encoding Fix" Margin="0,4,0,0" Foreground="#555"/>
                     <TextBlock Name="txtAssessmentID" Text="Assessment ID:" Margin="0,8,0,0" Foreground="#555"/>
                 </StackPanel>
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top">

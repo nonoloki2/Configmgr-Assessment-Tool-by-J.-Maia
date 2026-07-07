@@ -1,7 +1,7 @@
 <#
  ConfigMgr Assessment Tool by J. Maia
- Version 1.4.0-alpha | Build 0011
- Phase: HTML Reporting Engine
+ Version 1.4.1-alpha | Build 0012
+ Phase: HTML Encoding Fix
 #>
 [CmdletBinding()]
 param()
