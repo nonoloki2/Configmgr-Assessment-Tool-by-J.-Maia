@@ -1,21 +1,20 @@
 # ConfigMgr Assessment Tool by J. Maia
 
-Version: **1.1.0-alpha**  
-Build: **0005**
+Version: **1.1.1-alpha**  
+Build: **0006**
 
 ## Scope of this build
 
-Professional Foundation build:
+Completion UX Fixes build:
 
-- Redesigned WPF UI using Grid layout.
-- Fixed Site Code and SMS Provider textbox clipping.
-- Discovery Engine 2.0 base inventory.
-- Topology TreeView.
-- Discovery dashboard summary.
-- Structured CSV export.
-- Structured logging by date.
-- Rule Engine and Knowledge Base folders prepared.
-- Settings.json support.
+- Makes Discovery completion unmistakable.
+- Shows a success popup when Discovery finishes.
+- Adds a clear completion summary: servers, roles, CSV and elapsed time.
+- Disables Run Discovery while the operation is running.
+- Re-enables buttons safely after completion or failure.
+- Adds **Open Output** button.
+- Prevents the Current task text from looking truncated without a tooltip.
+- Keeps the Professional Foundation UI, dashboard, topology tree, logging and CSV export.
 
 ## Run
 
@@ -35,6 +34,13 @@ The SMS Provider is often the Primary Site Server, but not always.
 - CSV: `Output\CSV`
 - Logs: `Output\Logs\yyyy\MM\dd`
 
-## Notes
+## Acceptance check for Build 0006
 
-This build is still focused on Discovery/Foundation. Core Health, MP, DP, SUP, WSUS, SQL and Distribution Content assessments will be added in later builds.
+After clicking **Run Discovery**, the tool should end with:
+
+- Header status: `Completed`
+- Progress: 100%
+- Completion summary visible under the buttons
+- Success popup displayed
+- CSV path shown in the status bar
+- **Open Output** enabled
