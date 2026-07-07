@@ -4,8 +4,8 @@ function Get-CATSettings {
     if (-not (Test-Path -LiteralPath $Path)) {
         $default = [ordered]@{
             ApplicationName = 'ConfigMgr Assessment Tool by J. Maia'
-            Version = '1.3.0-alpha'
-            Build = '0010'
+            Version = '1.4.0-alpha'
+            Build = '0011'
             Theme = 'Light'
             TimeoutSeconds = 30
             MaxThreads = 8
@@ -60,6 +60,7 @@ function New-CATAssessmentSession {
         }
         LogFile = $null
         LastCsvPath = $null
+        LastHtmlPath = $null
     }
 }
 
@@ -101,8 +102,8 @@ function New-CATResult {
         Source = $Source
         RuleId = $RuleId
         DurationSeconds = $DurationSeconds
-        ToolVersion = '1.3.0-alpha'
-        Build = '0010'
+        ToolVersion = '1.4.0-alpha'
+        Build = '0011'
     }
 }
 

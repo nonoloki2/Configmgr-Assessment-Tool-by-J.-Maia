@@ -22,10 +22,10 @@ function Get-CATRuleDecision {
         'CORE-DISK-001' {
             $freePct = [double]$Data.FreePct
             $freeGB = [double]$Data.FreeGB
-            if ($freePct -lt [double]$Policy.DiskFree.CriticalBelowPercent -or $freeGB -lt [double]$Policy.DiskFree.CriticalBelowGB) {
+            if ($freePct -lt [double]$Policy.DiskFree.CriticalBelowPercent) {
                 return @{ Status='Critical'; Severity='High'; Impact='High'; Recommendation='Free disk space is critically low. Increase capacity or perform cleanup. Validate ConfigMgr logs, content library, WSUS/SUSDB, SQL files, IIS logs and cleanup strategy.' }
             }
-            elseif ($freePct -lt [double]$Policy.DiskFree.HealthyMinPercent -or $freeGB -lt [double]$Policy.DiskFree.WarningBelowGB) {
+            elseif ($freePct -lt [double]$Policy.DiskFree.HealthyMinPercent) {
                 return @{ Status='Warning'; Severity='Medium'; Impact='Medium'; Recommendation='Free disk space is below recommended threshold. Plan cleanup or capacity expansion.' }
             }
             else {
@@ -67,6 +67,18 @@ function Get-CATRuleDecision {
             }
             elseif ($avg -ge [double]$Policy.Ping.WarningLatencyMs) {
                 return @{ Status='Warning'; Severity='Medium'; Impact='Medium'; Recommendation='Network latency is above normal threshold. Validate network path and remote site performance.' }
+            }
+            else {
+                return @{ Status='Healthy'; Severity='Info'; Impact='Low'; Recommendation='No action required.' }
+            }
+        }
+        'CORE-LASTPATCH-001' {
+            $days = [double]$Data.Days
+            if ($days -ge [double]$Policy.Uptime.CriticalMinDays) {
+                return @{ Status='Critical'; Severity='High'; Impact='High'; Recommendation='Last installed KB evidence is older than the critical threshold. Investigate update history and ConfigMgr/SUP deployment status.' }
+            }
+            elseif ($days -gt [double]$Policy.Uptime.HealthyMaxDays) {
+                return @{ Status='Warning'; Severity='Medium'; Impact='Medium'; Recommendation='Last installed KB evidence is older than expected. Validate recent update installation history.' }
             }
             else {
                 return @{ Status='Healthy'; Severity='Info'; Impact='Low'; Recommendation='No action required.' }

@@ -7,7 +7,7 @@ function Show-CATMainWindow {
     [xml]$xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="ConfigMgr Assessment Tool by J. Maia" Height="760" Width="1180" MinHeight="700" MinWidth="1050" WindowStartupLocation="CenterScreen" Background="#F3F3F3" FontFamily="Segoe UI" FontSize="12">
+        Title="ConfigMgr Assessment Tool by J. Maia" Height="780" Width="1280" MinHeight="720" MinWidth="1160" WindowStartupLocation="CenterScreen" Background="#F3F3F3" FontFamily="Segoe UI" FontSize="12">
     <Grid Margin="12">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
@@ -24,7 +24,7 @@ function Show-CATMainWindow {
                 </Grid.ColumnDefinitions>
                 <StackPanel Grid.Column="0">
                     <TextBlock Text="ConfigMgr Assessment Tool by J. Maia" FontSize="24" FontWeight="SemiBold" Foreground="#222"/>
-                    <TextBlock Name="txtVersion" Text="Version 1.3.0-alpha | Build 0010 | Core Health Professional" Margin="0,4,0,0" Foreground="#555"/>
+                    <TextBlock Name="txtVersion" Text="Version 1.4.0-alpha | Build 0011 | HTML Reporting Engine" Margin="0,4,0,0" Foreground="#555"/>
                     <TextBlock Name="txtAssessmentID" Text="Assessment ID:" Margin="0,8,0,0" Foreground="#555"/>
                 </StackPanel>
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top">
@@ -40,12 +40,13 @@ function Show-CATMainWindow {
                     <ColumnDefinition Width="85"/>
                     <ColumnDefinition Width="120"/>
                     <ColumnDefinition Width="110"/>
-                    <ColumnDefinition Width="255"/>
+                    <ColumnDefinition Width="250"/>
                     <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="115"/>
                     <ColumnDefinition Width="120"/>
+                    <ColumnDefinition Width="95"/>
+                    <ColumnDefinition Width="115"/>
                     <ColumnDefinition Width="120"/>
-                    <ColumnDefinition Width="105"/>
-                    <ColumnDefinition Width="130"/>
                     <ColumnDefinition Width="70"/>
                 </Grid.ColumnDefinitions>
                 <Grid.RowDefinitions>
@@ -60,9 +61,10 @@ function Show-CATMainWindow {
                 <Button Grid.Column="5" Name="btnDiscovery" Content="Run Discovery" Height="30" Margin="8,0,8,0"/>
                 <Button Grid.Column="6" Name="btnCoreHealth" Content="Run Core Health" Height="30" Margin="0,0,8,0" IsEnabled="False"/>
                 <Button Grid.Column="7" Name="btnExport" Content="Export CSV" Height="30" Margin="0,0,8,0" IsEnabled="False"/>
-                <Button Grid.Column="8" Name="btnOpenOutput" Content="Open Output" Height="30" Margin="0,0,8,0" IsEnabled="False"/>
-                <Button Grid.Column="9" Name="btnExit" Content="Exit" Height="30"/>
-                <TextBlock Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="10" Name="txtCompletion" Text="Ready to run discovery." Margin="0,10,0,0" Foreground="#555" FontWeight="SemiBold" TextWrapping="Wrap"/>
+                <Button Grid.Column="8" Name="btnHtml" Content="HTML Report" Height="30" Margin="0,0,8,0" IsEnabled="False"/>
+                <Button Grid.Column="9" Name="btnOpenOutput" Content="Open Output" Height="30" Margin="0,0,8,0" IsEnabled="False"/>
+                <Button Grid.Column="10" Name="btnExit" Content="Exit" Height="30"/>
+                <TextBlock Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="11" Name="txtCompletion" Text="Ready to run discovery." Margin="0,10,0,0" Foreground="#555" FontWeight="SemiBold" TextWrapping="Wrap"/>
             </Grid>
         </Border>
 
@@ -151,7 +153,7 @@ function Show-CATMainWindow {
     $reader = New-Object System.Xml.XmlNodeReader $xaml
     $window = [Windows.Markup.XamlReader]::Load($reader)
 
-    $names = 'txtVersion','txtAssessmentID','txtHeaderStatus','txtSiteCode','txtProvider','txtCurrentTask','txtCompletion','btnDiscovery','btnCoreHealth','btnExport','btnOpenOutput','btnExit','sumServers','sumRoles','sumMP','sumDP','sumSUP','sumRP','treeTopology','progressBar','txtElapsed','gridResults','txtLog','txtDebug','statusLeft','statusLog','statusCsv'
+    $names = 'txtVersion','txtAssessmentID','txtHeaderStatus','txtSiteCode','txtProvider','txtCurrentTask','txtCompletion','btnDiscovery','btnCoreHealth','btnExport','btnHtml','btnOpenOutput','btnExit','sumServers','sumRoles','sumMP','sumDP','sumSUP','sumRP','treeTopology','progressBar','txtElapsed','gridResults','txtLog','txtDebug','statusLeft','statusLog','statusCsv'
     $ui = @{}
     foreach($n in $names){ $ui[$n] = $window.FindName($n) }
 
@@ -241,6 +243,7 @@ function Show-CATMainWindow {
             $ui.btnCoreHealth.IsEnabled = $false
             $ui.btnExport.IsEnabled = $false
             $ui.btnOpenOutput.IsEnabled = $false
+            $ui.btnHtml.IsEnabled = $false
             $ui.txtCompletion.Text = 'Discovery is running. Please wait...'
             $ui.txtCompletion.Foreground = '#555'
             $ui.txtHeaderStatus.Text = 'Running'
@@ -270,6 +273,7 @@ function Show-CATMainWindow {
             $ui.txtCompletion.Foreground = 'Green'
             $ui.progressBar.Value = 100
             $ui.btnOpenOutput.IsEnabled = $true
+            $ui.btnHtml.IsEnabled = $true
             $ui.btnCoreHealth.IsEnabled = $true
             $ui.txtDebug.Text = "AssessmentID: $($Session.AssessmentID)`r`nLogFile: $($Session.LogFile)`r`nCSV: $csv`r`nServers: $serverCount`r`nRoles: $roleCount`r`nElapsed: $elapsedText"
             [System.Windows.MessageBox]::Show($summary + "`n`nCSV:`n$csv", 'Discovery completed', 'OK', 'Information') | Out-Null
@@ -304,6 +308,7 @@ function Show-CATMainWindow {
             $ui.btnCoreHealth.IsEnabled = $false
             $ui.btnExport.IsEnabled = $false
             $ui.btnOpenOutput.IsEnabled = $false
+            $ui.btnHtml.IsEnabled = $false
             $ui.txtCompletion.Text = 'Core Health is running. Please wait...'
             $ui.txtCompletion.Foreground = '#555'
             $ui.txtHeaderStatus.Text = 'Running Core Health'
@@ -329,6 +334,7 @@ function Show-CATMainWindow {
             $ui.txtCompletion.Foreground = 'Green'
             $ui.progressBar.Value = 100
             $ui.btnOpenOutput.IsEnabled = $true
+            $ui.btnHtml.IsEnabled = $true
             $ui.txtDebug.Text = "AssessmentID: $($Session.AssessmentID)`r`nLogFile: $($Session.LogFile)`r`nCSV: $csv`r`nCoreHealth Servers: $($summaryObj.Servers)`r`nHealthy: $($summaryObj.Healthy)`r`nWarning: $($summaryObj.Warning)`r`nCritical: $($summaryObj.Critical)`r`nUnableToCheck: $($summaryObj.UnableToCheck)`r`nHealthScore: $($summaryObj.HealthScore)%`r`nElapsed: $elapsedText"
             [System.Windows.MessageBox]::Show($summary + "`n`nCSV:`n$csv", 'Core Health completed', 'OK', 'Information') | Out-Null
         } catch {
@@ -345,6 +351,7 @@ function Show-CATMainWindow {
             $ui.btnCoreHealth.IsEnabled = ($Session.Inventory.Servers -and @($Session.Inventory.Servers).Count -gt 0)
             $ui.btnExport.IsEnabled = ($Session.Results.Count -gt 0)
             $ui.btnOpenOutput.IsEnabled = ($Session.LastCsvPath -and (Test-Path -LiteralPath $Session.LastCsvPath))
+            $ui.btnHtml.IsEnabled = ($Session.Results.Count -gt 0)
         }
     })
 
@@ -353,9 +360,28 @@ function Show-CATMainWindow {
             $csv = Export-CATCsv -Session $Session
             $ui.statusCsv.Text = "CSV: $csv"
             $ui.btnOpenOutput.IsEnabled = $true
+            $ui.btnHtml.IsEnabled = $true
             Add-UiLog "CSV exported: $csv"
             [System.Windows.MessageBox]::Show("CSV exported:`n$csv", 'Export CSV', 'OK', 'Information') | Out-Null
         } catch { [System.Windows.MessageBox]::Show($_.Exception.Message, 'Export failed', 'OK', 'Error') | Out-Null }
+    })
+
+    $ui.btnHtml.Add_Click({
+        try {
+            if (-not $Session.Results -or $Session.Results.Count -eq 0) {
+                [System.Windows.MessageBox]::Show('Run Discovery/Core Health before generating the HTML report.', 'HTML Report', 'OK', 'Warning') | Out-Null
+                return
+            }
+            Add-UiLog 'Generating HTML report.'
+            $html = Export-CATHtmlReport -Session $Session
+            $ui.btnOpenOutput.IsEnabled = $true
+            Add-UiLog "HTML report generated: $html"
+            [System.Windows.MessageBox]::Show("HTML report generated:`n$html", 'HTML Report', 'OK', 'Information') | Out-Null
+            Start-Process -FilePath $html
+        } catch {
+            Add-UiLog $_.Exception.Message 'ERROR'
+            [System.Windows.MessageBox]::Show($_.Exception.Message, 'HTML Report failed', 'OK', 'Error') | Out-Null
+        }
     })
 
     $ui.btnOpenOutput.Add_Click({

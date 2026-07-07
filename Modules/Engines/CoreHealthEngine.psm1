@@ -32,6 +32,45 @@ function Invoke-CATCoreHealth {
     }
     function Format-GB([double]$Bytes){ return [math]::Round($Bytes / 1GB, 2) }
     function Escape-CimFilterValue([string]$Value){ return $Value.Replace("'", "''") }
+    function ConvertTo-CATDateTimeSafe {
+        param([AllowNull()][object]$Value)
+        if ($null -eq $Value) { return $null }
+        if ($Value -is [datetime]) { return [datetime]$Value }
+        $text = [string]$Value
+        if ([string]::IsNullOrWhiteSpace($text)) { return $null }
+        $dt = [datetime]::MinValue
+        if ([datetime]::TryParse($text, [ref]$dt)) { return $dt }
+        return $null
+    }
+    function Get-CATPendingRebootState {
+        param([string]$ComputerName)
+        $scriptBlock = {
+            $reasons = New-Object System.Collections.Generic.List[string]
+            $paths = @(
+                @{ Name='Component Based Servicing'; Path='HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending' },
+                @{ Name='Windows Update'; Path='HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired' },
+                @{ Name='Pending File Rename Operations'; Path='HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager'; Value='PendingFileRenameOperations' },
+                @{ Name='Computer Rename Pending'; Path='HKLM:\SYSTEM\CurrentControlSet\Control\ComputerName\ActiveComputerName'; ComparePath='HKLM:\SYSTEM\CurrentControlSet\Control\ComputerName\ComputerName' },
+                @{ Name='Server Manager Reboot Required'; Path='HKLM:\SOFTWARE\Microsoft\ServerManager\CurrentRebootAttempts' }
+            )
+            foreach($item in $paths){
+                try {
+                    if($item.ComparePath){
+                        $active = (Get-ItemProperty -Path $item.Path -ErrorAction Stop).ComputerName
+                        $pending = (Get-ItemProperty -Path $item.ComparePath -ErrorAction Stop).ComputerName
+                        if($active -ne $pending){ $reasons.Add($item.Name) | Out-Null }
+                    } elseif($item.Value){
+                        $prop = Get-ItemProperty -Path $item.Path -Name $item.Value -ErrorAction SilentlyContinue
+                        if($prop -and $prop.PSObject.Properties[$item.Value] -and $prop.PSObject.Properties[$item.Value].Value){ $reasons.Add($item.Name) | Out-Null }
+                    } else {
+                        if(Test-Path -LiteralPath $item.Path){ $reasons.Add($item.Name) | Out-Null }
+                    }
+                } catch { }
+            }
+            [pscustomobject]@{ Pending = ($reasons.Count -gt 0); Reasons = @($reasons) }
+        }
+        Invoke-Command -ComputerName $ComputerName -ScriptBlock $scriptBlock -ErrorAction Stop
+    }
 
     $servers = @($Session.Inventory.Servers | Sort-Object -Unique)
     if (-not $servers -or $servers.Count -eq 0) { throw 'Core Health requires a successful Discovery first. No site system servers were found in memory.' }
@@ -103,6 +142,39 @@ function Invoke-CATCoreHealth {
                 $rule = Get-CATRuleDecision -RuleId 'CORE-UPTIME-001' -Data @{ Days=$uptime.TotalDays } -Policy $policy
                 Add-HealthResult -Category 'Operating System' -Check 'Uptime' -Target $server -Role $roleText -Value ("{0} days" -f $uptimeDays) -Status $rule.Status -Severity $rule.Severity -Impact $rule.Impact -Finding ("Last boot: {0}; Uptime: {1} days." -f $lastBoot.ToString('yyyy-MM-dd HH:mm:ss'),$uptimeDays) -Recommendation $rule.Recommendation -Evidence ("LastBoot={0}; UptimeDays={1}; HealthyMaxDays={2}; WarningMaxDays={3}; CriticalMinDays={4}" -f $lastBoot.ToString('yyyy-MM-dd HH:mm:ss'),$uptimeDays,$policy.Uptime.HealthyMaxDays,$policy.Uptime.WarningMaxDays,$policy.Uptime.CriticalMinDays) -Source 'Win32_OperatingSystem' -RuleId 'CORE-UPTIME-001'
 
+                # Patch evidence: last installed KB and pending reboot. This is factual evidence, not a compliance score.
+                try {
+                    $qfes = @(Get-CimInstance -ComputerName $server -ClassName Win32_QuickFixEngineering -ErrorAction Stop | Where-Object { $_.HotFixID })
+                    $qfeParsed = @($qfes | ForEach-Object {
+                        [pscustomobject]@{ HotFixID = $_.HotFixID; InstalledOnRaw = $_.InstalledOn; InstalledOn = ConvertTo-CATDateTimeSafe $_.InstalledOn; Description = $_.Description }
+                    } | Where-Object { $_.InstalledOn })
+                    if($qfeParsed.Count -gt 0){
+                        $lastKb = $qfeParsed | Sort-Object InstalledOn -Descending | Select-Object -First 1
+                        $daysSincePatch = [math]::Round(((Get-Date) - $lastKb.InstalledOn).TotalDays, 1)
+                        $patchRule = Get-CATRuleDecision -RuleId 'CORE-LASTPATCH-001' -Data @{ Days=$daysSincePatch } -Policy $policy
+                        Add-HealthResult -Category 'Patch Evidence' -Check 'Last Installed KB' -Target $server -Role $roleText -Value $lastKb.HotFixID -Status $patchRule.Status -Severity $patchRule.Severity -Impact $patchRule.Impact -Finding ("Last installed hotfix found: {0}." -f $lastKb.HotFixID) -Recommendation $patchRule.Recommendation -Evidence ("HotFixID={0}; Description={1}; InstalledOnRaw={2}" -f $lastKb.HotFixID,$lastKb.Description,$lastKb.InstalledOnRaw) -Source 'Win32_QuickFixEngineering' -RuleId 'CORE-LASTPATCH-001'
+                        Add-HealthResult -Category 'Patch Evidence' -Check 'Installed On' -Target $server -Role $roleText -Value ($lastKb.InstalledOn.ToString('yyyy-MM-dd HH:mm:ss')) -Status $patchRule.Status -Severity $patchRule.Severity -Impact $patchRule.Impact -Finding ("Last KB installation date: {0}." -f $lastKb.InstalledOn.ToString('yyyy-MM-dd HH:mm:ss')) -Recommendation $patchRule.Recommendation -Evidence ("InstalledOn={0}" -f $lastKb.InstalledOn.ToString('yyyy-MM-dd HH:mm:ss')) -Source 'Win32_QuickFixEngineering' -RuleId 'CORE-LASTPATCH-001'
+                        Add-HealthResult -Category 'Patch Evidence' -Check 'Days Since Last Patch' -Target $server -Role $roleText -Value ("{0} days" -f $daysSincePatch) -Status $patchRule.Status -Severity $patchRule.Severity -Impact $patchRule.Impact -Finding ("{0} day(s) since last installed KB evidence." -f $daysSincePatch) -Recommendation $patchRule.Recommendation -Evidence ("DaysSinceLastPatch={0}; HealthyMaxDays={1}; WarningMaxDays={2}; CriticalMinDays={3}" -f $daysSincePatch,$policy.Uptime.HealthyMaxDays,$policy.Uptime.WarningMaxDays,$policy.Uptime.CriticalMinDays) -Source 'Win32_QuickFixEngineering' -RuleId 'CORE-LASTPATCH-001'
+                    } else {
+                        Add-HealthResult -Category 'Patch Evidence' -Check 'Last Installed KB' -Target $server -Role $roleText -Status 'UnableToCheck' -Severity 'Medium' -Impact 'Medium' -Finding 'No installed KB date evidence was returned by Win32_QuickFixEngineering.' -Recommendation 'Validate Windows Update history manually if patch evidence is required.' -Evidence 'No dated QuickFixEngineering records.' -Source 'Win32_QuickFixEngineering'
+                    }
+                } catch {
+                    Add-HealthResult -Category 'Patch Evidence' -Check 'Last Installed KB' -Target $server -Role $roleText -Status 'UnableToCheck' -Severity 'Medium' -Impact 'Medium' -Finding 'Unable to query installed KB evidence.' -Recommendation 'Validate remote permissions and Windows Update history manually if required.' -Evidence $_.Exception.Message -Source 'Win32_QuickFixEngineering'
+                }
+
+                try {
+                    $reboot = Get-CATPendingRebootState -ComputerName $server
+                    if($reboot.Pending){
+                        $reasonText = (@($reboot.Reasons) -join '; ')
+                        Add-HealthResult -Category 'Patch Evidence' -Check 'Pending Reboot' -Target $server -Role $roleText -Value 'Yes' -Status 'Warning' -Severity 'Medium' -Impact 'Medium' -Finding 'The server has pending reboot evidence.' -Recommendation 'Confirm maintenance window and reboot the server if appropriate.' -Evidence ("Reasons={0}" -f $reasonText) -Source 'Registry/Invoke-Command' -RuleId 'CORE-PENDINGREBOOT-001'
+                        Add-HealthResult -Category 'Patch Evidence' -Check 'Pending Reboot Reason' -Target $server -Role $roleText -Value $reasonText -Status 'Warning' -Severity 'Medium' -Impact 'Medium' -Finding 'Pending reboot reason(s) detected.' -Recommendation 'Review the pending reboot reasons before remediation.' -Evidence ("Reasons={0}" -f $reasonText) -Source 'Registry/Invoke-Command' -RuleId 'CORE-PENDINGREBOOT-001'
+                    } else {
+                        Add-HealthResult -Category 'Patch Evidence' -Check 'Pending Reboot' -Target $server -Role $roleText -Value 'No' -Status 'Healthy' -Severity 'Info' -Impact 'Low' -Finding 'No common pending reboot registry indicators were detected.' -Recommendation 'No action required.' -Evidence 'No known pending reboot registry indicators found.' -Source 'Registry/Invoke-Command' -RuleId 'CORE-PENDINGREBOOT-001'
+                    }
+                } catch {
+                    Add-HealthResult -Category 'Patch Evidence' -Check 'Pending Reboot' -Target $server -Role $roleText -Status 'UnableToCheck' -Severity 'Medium' -Impact 'Medium' -Finding 'Unable to check pending reboot state.' -Recommendation 'Validate PowerShell remoting permissions and check pending reboot registry keys manually if required.' -Evidence $_.Exception.Message -Source 'Registry/Invoke-Command' -RuleId 'CORE-PENDINGREBOOT-001'
+                }
+
                 # Memory from OS object
                 $totalGB = [math]::Round(($os.TotalVisibleMemorySize * 1KB) / 1GB, 2)
                 $freeGB = [math]::Round(($os.FreePhysicalMemory * 1KB) / 1GB, 2)
@@ -141,8 +213,13 @@ function Invoke-CATCoreHealth {
                         $freeGB = [math]::Round($disk.FreeSpace / 1GB, 2)
                         $sizeGB = [math]::Round($disk.Size / 1GB, 2)
                         $usedGB = [math]::Round($sizeGB - $freeGB, 2)
-                        $rule = Get-CATRuleDecision -RuleId 'CORE-DISK-001' -Data @{ FreePct=$freePct; FreeGB=$freeGB } -Policy $policy
-                        Add-HealthResult -Category 'Storage' -Check ("Disk {0}" -f $disk.DeviceID) -Target $server -Role $roleText -Value ("Total={0} GB; Used={1} GB; Free={2} GB; FreePct={3}%" -f $sizeGB,$usedGB,$freeGB,$freePct) -Status $rule.Status -Severity $rule.Severity -Impact $rule.Impact -Finding ("Drive {0} ({1}) has {2} GB free of {3} GB ({4}% free; {5}% used)." -f $disk.DeviceID,$disk.FileSystem,$freeGB,$sizeGB,$freePct,$usedPct) -Recommendation $rule.Recommendation -Evidence ("DeviceID={0}; FileSystem={1}; TotalGB={2}; UsedGB={3}; FreeGB={4}; UsedPct={5}; FreePct={6}" -f $disk.DeviceID,$disk.FileSystem,$sizeGB,$usedGB,$freeGB,$usedPct,$freePct) -Source 'Win32_LogicalDisk' -RuleId 'CORE-DISK-001'
+                        $isIgnoredSystemVolume = (($disk.FileSystem -match 'FAT|FAT32') -and $sizeGB -lt 5) -or ($sizeGB -lt 3 -and $freePct -ge 90)
+                        if($isIgnoredSystemVolume){
+                            Add-HealthResult -Category 'Storage' -Check ("Disk {0}" -f $disk.DeviceID) -Target $server -Role $roleText -Value ("Total={0} GB; Used={1} GB; Free={2} GB; FreePct={3}%" -f $sizeGB,$usedGB,$freeGB,$freePct) -Status 'NotApplicable' -Severity 'Info' -Impact 'Low' -Finding ("Drive {0} ({1}) appears to be a small system/reserved volume and was ignored for capacity assessment." -f $disk.DeviceID,$disk.FileSystem) -Recommendation 'No action required.' -Evidence ("DeviceID={0}; FileSystem={1}; TotalGB={2}; UsedGB={3}; FreeGB={4}; UsedPct={5}; FreePct={6}; IgnoredReason=SmallSystemOrReservedVolume" -f $disk.DeviceID,$disk.FileSystem,$sizeGB,$usedGB,$freeGB,$usedPct,$freePct) -Source 'Win32_LogicalDisk' -RuleId 'CORE-DISK-001'
+                        } else {
+                            $rule = Get-CATRuleDecision -RuleId 'CORE-DISK-001' -Data @{ FreePct=$freePct; FreeGB=$freeGB } -Policy $policy
+                            Add-HealthResult -Category 'Storage' -Check ("Disk {0}" -f $disk.DeviceID) -Target $server -Role $roleText -Value ("Total={0} GB; Used={1} GB; Free={2} GB; FreePct={3}%" -f $sizeGB,$usedGB,$freeGB,$freePct) -Status $rule.Status -Severity $rule.Severity -Impact $rule.Impact -Finding ("Drive {0} ({1}) has {2} GB free of {3} GB ({4}% free; {5}% used)." -f $disk.DeviceID,$disk.FileSystem,$freeGB,$sizeGB,$freePct,$usedPct) -Recommendation $rule.Recommendation -Evidence ("DeviceID={0}; FileSystem={1}; TotalGB={2}; UsedGB={3}; FreeGB={4}; UsedPct={5}; FreePct={6}" -f $disk.DeviceID,$disk.FileSystem,$sizeGB,$usedGB,$freeGB,$usedPct,$freePct) -Source 'Win32_LogicalDisk' -RuleId 'CORE-DISK-001'
+                        }
                     }
                 }
             } catch {
