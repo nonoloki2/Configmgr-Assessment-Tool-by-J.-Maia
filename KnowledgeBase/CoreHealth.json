@@ -1,29 +1,39 @@
 {
-  "Module": "CoreHealth",
   "Rules": [
     {
-      "Id": "CORE-DISK-CRITICAL",
-      "Category": "Storage",
-      "Condition": "FreePct < 10 OR FreeGB < 10",
-      "Severity": "High",
-      "Status": "Critical",
-      "Recommendation": "Free disk space is critically low. Validate logs, content library, WSUS/SUSDB, SQL, IIS logs and cleanup strategy."
+      "RuleId": "CORE-UPTIME-001",
+      "Name": "Server uptime threshold",
+      "Description": "Classifies server uptime as Healthy up to 37 days, Warning from 38 to 59 days, and Critical at 60 days or more.",
+      "RecommendationWarning": "Verify Windows Update compliance and confirm whether a reboot is pending after the latest monthly cumulative update.",
+      "RecommendationCritical": "Investigate patch compliance immediately. Verify latest cumulative updates, pending reboot state, and maintenance schedule."
     },
     {
-      "Id": "CORE-DISK-WARNING",
-      "Category": "Storage",
-      "Condition": "FreePct < 20 OR FreeGB < 20",
-      "Severity": "Medium",
-      "Status": "Warning",
-      "Recommendation": "Free disk space is below recommended threshold. Plan cleanup or expansion."
+      "RuleId": "CORE-DISK-001",
+      "Name": "Disk free space threshold",
+      "Description": "Classifies fixed disks using free percentage and free GB thresholds.",
+      "RecommendationWarning": "Plan cleanup or capacity expansion.",
+      "RecommendationCritical": "Increase capacity or perform cleanup. Validate ConfigMgr logs, content library, WSUS/SUSDB, SQL files and IIS logs."
     },
     {
-      "Id": "CORE-UPTIME-WARNING",
-      "Category": "Operating System",
-      "Condition": "UptimeDays > 90",
-      "Severity": "Low",
-      "Status": "Warning",
-      "Recommendation": "Review maintenance/reboot cadence. Long uptime can hide pending updates or service issues."
+      "RuleId": "CORE-MEMORY-001",
+      "Name": "Memory usage threshold",
+      "Description": "Classifies physical memory utilization.",
+      "RecommendationWarning": "Review running processes and workload trends.",
+      "RecommendationCritical": "Review processes, ConfigMgr/SQL/WSUS workload, and consider increasing RAM."
+    },
+    {
+      "RuleId": "CORE-CPU-001",
+      "Name": "CPU usage threshold",
+      "Description": "Classifies current CPU load.",
+      "RecommendationWarning": "Review process activity and recurring maintenance windows.",
+      "RecommendationCritical": "Review processes and role-specific workload immediately."
+    },
+    {
+      "RuleId": "CORE-PING-001",
+      "Name": "Ping latency threshold",
+      "Description": "Classifies ICMP latency and packet loss.",
+      "RecommendationWarning": "Validate network path and remote site performance.",
+      "RecommendationCritical": "Validate routing, WAN links, firewall inspection and server responsiveness."
     }
   ]
 }

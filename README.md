@@ -1,29 +1,58 @@
 # ConfigMgr Assessment Tool by J. Maia
 
-Version **1.2.0-alpha** | Build **0009** | Release **1.2 - Core Health Assessment**
+Version: **1.3.0-alpha**  
+Build: **0010**  
+Release: **Core Health Assessment Professional**
 
 ## What is included
 
-- Professional GUI validated in Build 0008
+- Professional WPF interface
 - Discovery Engine
 - Topology tree
 - CSV export
-- Execution log
+- Execution logging
 - Open Output button
-- New **Run Core Health** module
+- Core Health module
+- Assessment Policy Engine
+- Rule Engine for Core Health thresholds
+- Rich CSV values for uptime, disk, memory, CPU, ping, DNS and WinRM
+- Initial Health Score calculation
 
-## Core Health checks in Build 0009
+## Core Health checks
 
-For every site system server discovered by Discovery:
+Run Discovery first, then run Core Health.
 
-- DNS resolution
-- Ping
-- WinRM
-- Operating system caption/version/build
-- Uptime and last boot time
-- Fixed disk free space with warning/critical thresholds
-- Basic Windows services
-- Role-aware services such as IIS/W3SVC and WSUS service where applicable
+Core Health collects:
+
+- DNS forward and reverse information
+- Ping average, min, max and packet loss
+- WinRM response time
+- OS caption, version, build, architecture and install date
+- Last boot time and uptime days
+- Disk total, used, free, used %, free % and file system
+- Physical memory total, used, free, used % and free %
+- CPU sockets, cores, logical processors and current load
+- Core services depending on role
+
+## Assessment policy
+
+Thresholds are stored in:
+
+```text
+Config\AssessmentPolicy.json
+```
+
+Default uptime policy:
+
+- Healthy: 0–37 days
+- Warning: 38–59 days
+- Critical: 60+ days
+
+Disk policy defaults:
+
+- Healthy: 20%+ free and at least 20 GB free
+- Warning: below 20% or below 20 GB free
+- Critical: below 10% or below 10 GB free
 
 ## How to run
 
@@ -31,21 +60,11 @@ For every site system server discovered by Discovery:
 powershell.exe -ExecutionPolicy Bypass -File .\ConfigMgrAssessmentTool.ps1
 ```
 
-## Recommended test flow
+Recommended flow:
 
 1. Enter Site Code.
 2. Enter SMS Provider.
-3. Click **Run Discovery**.
-4. Confirm Discovery completes.
-5. Click **Run Core Health**.
-6. Validate Results, Execution Log, CSV and Open Output.
-
-## Acceptance check for Build 0009
-
-- GUI opens without error.
-- Discovery still works.
-- Run Core Health becomes enabled only after Discovery.
-- Core Health adds results to the grid.
-- CSV exports CoreHealth rows.
-- Open Output opens the CSV folder.
-- Elapsed timer stops correctly after Core Health.
+3. Run Discovery.
+4. Run Core Health.
+5. Export CSV.
+6. Open Output.

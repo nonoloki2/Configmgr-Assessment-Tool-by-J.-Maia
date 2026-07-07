@@ -1,0 +1,29 @@
+{
+  "Uptime": {
+    "HealthyMaxDays": 37,
+    "WarningMaxDays": 59,
+    "CriticalMinDays": 60
+  },
+  "DiskFree": {
+    "HealthyMinPercent": 20,
+    "WarningMinPercent": 10,
+    "CriticalBelowPercent": 10,
+    "CriticalBelowGB": 10,
+    "WarningBelowGB": 20
+  },
+  "MemoryUsage": {
+    "HealthyMaxPercent": 80,
+    "WarningMaxPercent": 90,
+    "CriticalAbovePercent": 90
+  },
+  "CpuUsage": {
+    "HealthyMaxPercent": 80,
+    "WarningMaxPercent": 90,
+    "CriticalAbovePercent": 90
+  },
+  "Ping": {
+    "WarningLatencyMs": 100,
+    "CriticalLatencyMs": 250,
+    "PingCount": 4
+  }
+}

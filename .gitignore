@@ -1,5 +1,5 @@
 Output/CSV/*.csv
-Output/Logs/**/*.log
+Output/Logs/*.log
 Output/Reports/*
 !Output/CSV/.gitkeep
 !Output/Logs/.gitkeep

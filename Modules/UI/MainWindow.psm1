@@ -24,7 +24,7 @@ function Show-CATMainWindow {
                 </Grid.ColumnDefinitions>
                 <StackPanel Grid.Column="0">
                     <TextBlock Text="ConfigMgr Assessment Tool by J. Maia" FontSize="24" FontWeight="SemiBold" Foreground="#222"/>
-                    <TextBlock Name="txtVersion" Text="Version 1.2.0-alpha | Build 0009 | Core Health Assessment" Margin="0,4,0,0" Foreground="#555"/>
+                    <TextBlock Name="txtVersion" Text="Version 1.3.0-alpha | Build 0010 | Core Health Professional" Margin="0,4,0,0" Foreground="#555"/>
                     <TextBlock Name="txtAssessmentID" Text="Assessment ID:" Margin="0,8,0,0" Foreground="#555"/>
                 </StackPanel>
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top">
@@ -120,8 +120,11 @@ function Show-CATMainWindow {
                             <DataGridTextColumn Header="Check" Binding="{Binding Check}" Width="160"/>
                             <DataGridTextColumn Header="Target" Binding="{Binding Target}" Width="160"/>
                             <DataGridTextColumn Header="Role" Binding="{Binding Role}" Width="180"/>
+                            <DataGridTextColumn Header="Value" Binding="{Binding Value}" Width="220"/>
                             <DataGridTextColumn Header="Finding" Binding="{Binding Finding}" Width="*"/>
-                            <DataGridTextColumn Header="Evidence" Binding="{Binding Evidence}" Width="220"/>
+                            <DataGridTextColumn Header="Impact" Binding="{Binding Impact}" Width="90"/>
+                            <DataGridTextColumn Header="Evidence" Binding="{Binding Evidence}" Width="260"/>
+                            <DataGridTextColumn Header="Rule" Binding="{Binding RuleId}" Width="130"/>
                         </DataGrid.Columns>
                     </DataGrid>
                 </TabItem>
@@ -318,7 +321,7 @@ function Show-CATMainWindow {
             $timer.Stop()
             $elapsedText = $script:CATDiscoveryStopwatch.Elapsed.ToString('hh\:mm\:ss')
             $ui.txtElapsed.Text = 'Elapsed: ' + $elapsedText
-            $summary = 'Core Health completed successfully | Servers: {0} | Healthy: {1} | Warning: {2} | Critical: {3} | UnableToCheck: {4} | CSV exported | Elapsed: {5}' -f $summaryObj.Servers,$summaryObj.Healthy,$summaryObj.Warning,$summaryObj.Critical,$summaryObj.UnableToCheck,$elapsedText
+            $summary = 'Core Health completed successfully | Servers: {0} | Healthy: {1} | Warning: {2} | Critical: {3} | UnableToCheck: {4} | Health Score: {5}% | CSV exported | Elapsed: {6}' -f $summaryObj.Servers,$summaryObj.Healthy,$summaryObj.Warning,$summaryObj.Critical,$summaryObj.UnableToCheck,$summaryObj.HealthScore,$elapsedText
             $ui.txtHeaderStatus.Text = 'Completed'
             $ui.txtHeaderStatus.Foreground = 'Green'
             Set-CurrentTaskText 'Core Health completed successfully - Ready for next action'
@@ -326,7 +329,7 @@ function Show-CATMainWindow {
             $ui.txtCompletion.Foreground = 'Green'
             $ui.progressBar.Value = 100
             $ui.btnOpenOutput.IsEnabled = $true
-            $ui.txtDebug.Text = "AssessmentID: $($Session.AssessmentID)`r`nLogFile: $($Session.LogFile)`r`nCSV: $csv`r`nCoreHealth Servers: $($summaryObj.Servers)`r`nHealthy: $($summaryObj.Healthy)`r`nWarning: $($summaryObj.Warning)`r`nCritical: $($summaryObj.Critical)`r`nUnableToCheck: $($summaryObj.UnableToCheck)`r`nElapsed: $elapsedText"
+            $ui.txtDebug.Text = "AssessmentID: $($Session.AssessmentID)`r`nLogFile: $($Session.LogFile)`r`nCSV: $csv`r`nCoreHealth Servers: $($summaryObj.Servers)`r`nHealthy: $($summaryObj.Healthy)`r`nWarning: $($summaryObj.Warning)`r`nCritical: $($summaryObj.Critical)`r`nUnableToCheck: $($summaryObj.UnableToCheck)`r`nHealthScore: $($summaryObj.HealthScore)%`r`nElapsed: $elapsedText"
             [System.Windows.MessageBox]::Show($summary + "`n`nCSV:`n$csv", 'Core Health completed', 'OK', 'Information') | Out-Null
         } catch {
             if ($script:CATDiscoveryStopwatch -and $script:CATDiscoveryStopwatch.IsRunning) { $script:CATDiscoveryStopwatch.Stop() }

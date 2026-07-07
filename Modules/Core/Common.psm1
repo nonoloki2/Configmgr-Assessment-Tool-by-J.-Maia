@@ -4,8 +4,8 @@ function Get-CATSettings {
     if (-not (Test-Path -LiteralPath $Path)) {
         $default = [ordered]@{
             ApplicationName = 'ConfigMgr Assessment Tool by J. Maia'
-            Version = '1.2.0-alpha'
-            Build = '0009'
+            Version = '1.3.0-alpha'
+            Build = '0010'
             Theme = 'Light'
             TimeoutSeconds = 30
             MaxThreads = 8
@@ -18,6 +18,23 @@ function Get-CATSettings {
     return (Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json)
 }
 
+function Get-CATAssessmentPolicy {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$AppRoot)
+    $path = Join-Path $AppRoot 'Config\AssessmentPolicy.json'
+    if (-not (Test-Path -LiteralPath $path)) {
+        $default = [ordered]@{
+            Uptime = [ordered]@{ HealthyMaxDays = 37; WarningMaxDays = 59; CriticalMinDays = 60 }
+            DiskFree = [ordered]@{ HealthyMinPercent = 20; WarningMinPercent = 10; CriticalBelowPercent = 10; CriticalBelowGB = 10; WarningBelowGB = 20 }
+            MemoryUsage = [ordered]@{ HealthyMaxPercent = 80; WarningMaxPercent = 90; CriticalAbovePercent = 90 }
+            CpuUsage = [ordered]@{ HealthyMaxPercent = 80; WarningMaxPercent = 90; CriticalAbovePercent = 90 }
+            Ping = [ordered]@{ WarningLatencyMs = 100; CriticalLatencyMs = 250; PingCount = 4 }
+        }
+        $default | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $path -Encoding UTF8
+    }
+    return (Get-Content -LiteralPath $path -Raw | ConvertFrom-Json)
+}
+
 function New-CATAssessmentSession {
     [CmdletBinding()]
     param([string]$AppRoot,[object]$Settings)
@@ -27,6 +44,7 @@ function New-CATAssessmentSession {
         AssessmentID = $id
         AppRoot = $AppRoot
         Settings = $Settings
+        Policy = Get-CATAssessmentPolicy -AppRoot $AppRoot
         StartTime = $now
         Results = New-Object System.Collections.ArrayList
         Inventory = [ordered]@{
@@ -37,6 +55,8 @@ function New-CATAssessmentSession {
             SQL = $null
             Boundaries = @()
             BoundaryGroups = @()
+            CoreHealth = $null
+            HealthScore = $null
         }
         LogFile = $null
         LastCsvPath = $null
@@ -52,12 +72,15 @@ function New-CATResult {
         [string]$Check = '',
         [string]$Target = '',
         [string]$Role = '',
+        [string]$Value = '',
         [ValidateSet('Healthy','Warning','Critical','Info','NotApplicable','UnableToCheck')][string]$Status = 'Info',
         [string]$Severity = 'Info',
+        [string]$Impact = '',
         [string]$Finding = '',
         [string]$Recommendation = '',
         [string]$Evidence = '',
         [string]$Source = '',
+        [string]$RuleId = '',
         [double]$DurationSeconds = 0
     )
     [pscustomobject]@{
@@ -68,15 +91,18 @@ function New-CATResult {
         Check = $Check
         Target = $Target
         Role = $Role
+        Value = $Value
         Status = $Status
         Severity = $Severity
+        Impact = $Impact
         Finding = $Finding
         Recommendation = $Recommendation
         Evidence = $Evidence
         Source = $Source
+        RuleId = $RuleId
         DurationSeconds = $DurationSeconds
-        ToolVersion = '1.2.0-alpha'
-        Build = '0009'
+        ToolVersion = '1.3.0-alpha'
+        Build = '0010'
     }
 }
 

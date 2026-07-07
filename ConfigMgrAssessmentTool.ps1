@@ -1,7 +1,7 @@
 <#
  ConfigMgr Assessment Tool by J. Maia
- Version 1.2.0-alpha | Build 0009
- Phase: Core Health Assessment
+ Version 1.3.0-alpha | Build 0010
+ Phase: Core Health Assessment Professional
 #>
 [CmdletBinding()]
 param()
@@ -11,7 +11,7 @@ $ErrorActionPreference = 'Stop'
 
 $script:AppRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $requiredDirs = @(
-    'Output','Output\Logs','Output\CSV','Output\Reports','Config','KnowledgeBase','Modules','Modules\Core','Modules\Engines','Modules\UI'
+    'Output','Output\Logs','Output\CSV','Output\Reports','Config','KnowledgeBase','Modules','Modules\Core','Modules\Engines','Modules\UI','Data','Data\History'
 )
 foreach ($d in $requiredDirs) {
     $p = Join-Path $script:AppRoot $d
