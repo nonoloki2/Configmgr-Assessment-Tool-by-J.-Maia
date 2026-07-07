@@ -1,5 +1,5 @@
 # ConfigMgr Assessment Tool by J. Maia
-# Version: 1.0.1-alpha - Phase 1 Fixed MVP
+# Version: 1.0.3-alpha - Phase 1 Fixed MVP
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -12,11 +12,50 @@ $Script:LogPath = Join-Path $Script:OutputPath 'Logs'
 
 
 function Ensure-OutputFolders {
-    foreach ($folder in @($Script:OutputPath, $Script:CsvPath, $Script:LogPath)) {
+    $folders = @(
+        $Script:OutputPath,
+        $Script:CsvPath,
+        $Script:LogPath,
+        (Join-Path $Script:OutputPath 'Reports')
+    )
+
+    foreach ($folder in $folders) {
         if ([string]::IsNullOrWhiteSpace($folder)) { continue }
-        if (-not (Test-Path -LiteralPath $folder)) {
-            New-Item -ItemType Directory -Path $folder -Force | Out-Null
+        try {
+            if (-not (Test-Path -LiteralPath $folder -PathType Container)) {
+                New-Item -ItemType Directory -Path $folder -Force -ErrorAction Stop | Out-Null
+            }
+            $gitkeep = Join-Path $folder '.gitkeep'
+            if (-not (Test-Path -LiteralPath $gitkeep)) {
+                New-Item -ItemType File -Path $gitkeep -Force -ErrorAction SilentlyContinue | Out-Null
+            }
         }
+        catch {
+            throw "Failed to create required folder '$folder'. Error: $($_.Exception.Message)"
+        }
+    }
+}
+
+function Initialize-LogFile {
+    param([string]$RequestedLogFile)
+
+    try {
+        $parent = Split-Path -Parent $RequestedLogFile
+        if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
+            New-Item -ItemType Directory -Path $parent -Force -ErrorAction Stop | Out-Null
+        }
+        New-Item -ItemType File -Path $RequestedLogFile -Force -ErrorAction Stop | Out-Null
+        return $RequestedLogFile
+    }
+    catch {
+        $fallbackRoot = Join-Path $env:TEMP 'ConfigMgrAssessmentTool_by_J_Maia'
+        $fallbackLog = Join-Path $fallbackRoot (Split-Path -Leaf $RequestedLogFile)
+        if (-not (Test-Path -LiteralPath $fallbackRoot -PathType Container)) {
+            New-Item -ItemType Directory -Path $fallbackRoot -Force -ErrorAction Stop | Out-Null
+        }
+        New-Item -ItemType File -Path $fallbackLog -Force -ErrorAction Stop | Out-Null
+        Write-Warning "Could not create log under project Output folder. Using fallback log: $fallbackLog"
+        return $fallbackLog
     }
 }
 
@@ -32,6 +71,8 @@ Add-Type -AssemblyName System.Drawing
 $Script:AssessmentId = ([guid]::NewGuid()).Guid.ToUpper()
 $Script:Results = New-Object System.Collections.Generic.List[object]
 $Script:CurrentLogFile = Join-Path $Script:LogPath "ConfigMgr_Assessment_$((Get-Date).ToString('yyyyMMdd_HHmmss'))_$($Script:AssessmentId).log"
+$Script:CurrentLogFile = Initialize-LogFile -RequestedLogFile $Script:CurrentLogFile
+Write-Host "ConfigMgr Assessment Tool startup log: $Script:CurrentLogFile"
 $Script:LastCsvFile = $null
 
 function Write-UiLog {
@@ -39,7 +80,21 @@ function Write-UiLog {
     Ensure-OutputFolders
     $timestamp = (Get-Date).ToString('HH:mm:ss')
     $line = "[$timestamp] $Message"
-    Add-Content -Path $Script:CurrentLogFile -Value $line -Encoding UTF8
+    try {
+        $parent = Split-Path -Parent $Script:CurrentLogFile
+        if (-not (Test-Path -LiteralPath $parent -PathType Container)) {
+            New-Item -ItemType Directory -Path $parent -Force -ErrorAction Stop | Out-Null
+        }
+        Add-Content -LiteralPath $Script:CurrentLogFile -Value $line -Encoding UTF8 -ErrorAction Stop
+    }
+    catch {
+        $fallbackRoot = Join-Path $env:TEMP 'ConfigMgrAssessmentTool_by_J_Maia'
+        if (-not (Test-Path -LiteralPath $fallbackRoot -PathType Container)) {
+            New-Item -ItemType Directory -Path $fallbackRoot -Force | Out-Null
+        }
+        $Script:CurrentLogFile = Join-Path $fallbackRoot ("ConfigMgr_Assessment_FALLBACK_$((Get-Date).ToString('yyyyMMdd_HHmmss'))_$($Script:AssessmentId).log")
+        Add-Content -LiteralPath $Script:CurrentLogFile -Value $line -Encoding UTF8
+    }
     $txtLog.AppendText($line + [Environment]::NewLine)
     $txtLog.SelectionStart = $txtLog.TextLength
     $txtLog.ScrollToCaret()
@@ -97,6 +152,7 @@ function Run-DiscoveryButtonClick {
         $Script:AssessmentId = ([guid]::NewGuid()).Guid.ToUpper()
         Ensure-OutputFolders
         $Script:CurrentLogFile = Join-Path $Script:LogPath "ConfigMgr_Assessment_$((Get-Date).ToString('yyyyMMdd_HHmmss'))_$($Script:AssessmentId).log"
+        $Script:CurrentLogFile = Initialize-LogFile -RequestedLogFile $Script:CurrentLogFile
         $Script:Results.Clear()
         $txtLog.Clear()
         $grid.Rows.Clear()
@@ -152,7 +208,7 @@ function Export-ButtonClick {
 }
 
 $form = New-Object System.Windows.Forms.Form
-$form.Text = 'ConfigMgr Assessment Tool by J. Maia - v1.0.1-alpha Phase 1'
+$form.Text = 'ConfigMgr Assessment Tool by J. Maia - v1.0.3-alpha Phase 1'
 $form.Size = New-Object System.Drawing.Size(1180, 760)
 $form.StartPosition = 'CenterScreen'
 $form.MinimumSize = New-Object System.Drawing.Size(1050, 650)
@@ -169,7 +225,7 @@ $lblTitle.Location = New-Object System.Drawing.Point(15, 12)
 $form.Controls.Add($lblTitle)
 
 $lblVersion = New-Object System.Windows.Forms.Label
-$lblVersion.Text = 'Version 1.0.1-alpha | Phase 1 Fixed MVP'
+$lblVersion.Text = 'Version 1.0.3-alpha | Phase 1 Fixed MVP'
 $lblVersion.AutoSize = $true
 $lblVersion.Location = New-Object System.Drawing.Point(18, 43)
 $form.Controls.Add($lblVersion)
