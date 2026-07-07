@@ -1,5 +1,5 @@
 # ConfigMgr Assessment Tool by J. Maia
-# Version: 1.0.3-alpha - Phase 1 Fixed MVP
+# Version: 1.0.4-alpha - Phase 1 Fixed MVP
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -73,6 +73,7 @@ $Script:Results = New-Object System.Collections.Generic.List[object]
 $Script:CurrentLogFile = Join-Path $Script:LogPath "ConfigMgr_Assessment_$((Get-Date).ToString('yyyyMMdd_HHmmss'))_$($Script:AssessmentId).log"
 $Script:CurrentLogFile = Initialize-LogFile -RequestedLogFile $Script:CurrentLogFile
 Write-Host "ConfigMgr Assessment Tool startup log: $Script:CurrentLogFile"
+if ($Script:ToolRoot.Length -gt 140) { Write-Warning "Project path is long ($($Script:ToolRoot.Length) chars). CSV/log export may use TEMP fallback if Windows path length limit is hit." }
 $Script:LastCsvFile = $null
 
 function Write-UiLog {
@@ -208,7 +209,7 @@ function Export-ButtonClick {
 }
 
 $form = New-Object System.Windows.Forms.Form
-$form.Text = 'ConfigMgr Assessment Tool by J. Maia - v1.0.3-alpha Phase 1'
+$form.Text = 'ConfigMgr Assessment Tool by J. Maia - v1.0.4-alpha Phase 1'
 $form.Size = New-Object System.Drawing.Size(1180, 760)
 $form.StartPosition = 'CenterScreen'
 $form.MinimumSize = New-Object System.Drawing.Size(1050, 650)
