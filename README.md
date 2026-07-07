@@ -1,46 +1,51 @@
 # ConfigMgr Assessment Tool by J. Maia
 
-Version: **1.1.1-alpha**  
-Build: **0006**
+Version **1.2.0-alpha** | Build **0009** | Release **1.2 - Core Health Assessment**
 
-## Scope of this build
+## What is included
 
-Completion UX Fixes build:
+- Professional GUI validated in Build 0008
+- Discovery Engine
+- Topology tree
+- CSV export
+- Execution log
+- Open Output button
+- New **Run Core Health** module
 
-- Makes Discovery completion unmistakable.
-- Shows a success popup when Discovery finishes.
-- Adds a clear completion summary: servers, roles, CSV and elapsed time.
-- Disables Run Discovery while the operation is running.
-- Re-enables buttons safely after completion or failure.
-- Adds **Open Output** button.
-- Prevents the Current task text from looking truncated without a tooltip.
-- Keeps the Professional Foundation UI, dashboard, topology tree, logging and CSV export.
+## Core Health checks in Build 0009
 
-## Run
+For every site system server discovered by Discovery:
+
+- DNS resolution
+- Ping
+- WinRM
+- Operating system caption/version/build
+- Uptime and last boot time
+- Fixed disk free space with warning/critical thresholds
+- Basic Windows services
+- Role-aware services such as IIS/W3SVC and WSUS service where applicable
+
+## How to run
 
 ```powershell
 powershell.exe -ExecutionPolicy Bypass -File .\ConfigMgrAssessmentTool.ps1
 ```
 
-## Required input
+## Recommended test flow
 
-- Site Code
-- SMS Provider server
+1. Enter Site Code.
+2. Enter SMS Provider.
+3. Click **Run Discovery**.
+4. Confirm Discovery completes.
+5. Click **Run Core Health**.
+6. Validate Results, Execution Log, CSV and Open Output.
 
-The SMS Provider is often the Primary Site Server, but not always.
+## Acceptance check for Build 0009
 
-## Output
-
-- CSV: `Output\CSV`
-- Logs: `Output\Logs\yyyy\MM\dd`
-
-## Acceptance check for Build 0008
-
-After clicking **Run Discovery**, the tool should end with:
-
-- Header status: `Completed`
-- Progress: 100%
-- Completion summary visible under the buttons
-- Success popup displayed
-- CSV path shown in the status bar
-- **Open Output** enabled
+- GUI opens without error.
+- Discovery still works.
+- Run Core Health becomes enabled only after Discovery.
+- Core Health adds results to the grid.
+- CSV exports CoreHealth rows.
+- Open Output opens the CSV folder.
+- Elapsed timer stops correctly after Core Health.

@@ -1,1 +1,29 @@
-{"module":"CoreHealth","rules":[]}
+{
+  "Module": "CoreHealth",
+  "Rules": [
+    {
+      "Id": "CORE-DISK-CRITICAL",
+      "Category": "Storage",
+      "Condition": "FreePct < 10 OR FreeGB < 10",
+      "Severity": "High",
+      "Status": "Critical",
+      "Recommendation": "Free disk space is critically low. Validate logs, content library, WSUS/SUSDB, SQL, IIS logs and cleanup strategy."
+    },
+    {
+      "Id": "CORE-DISK-WARNING",
+      "Category": "Storage",
+      "Condition": "FreePct < 20 OR FreeGB < 20",
+      "Severity": "Medium",
+      "Status": "Warning",
+      "Recommendation": "Free disk space is below recommended threshold. Plan cleanup or expansion."
+    },
+    {
+      "Id": "CORE-UPTIME-WARNING",
+      "Category": "Operating System",
+      "Condition": "UptimeDays > 90",
+      "Severity": "Low",
+      "Status": "Warning",
+      "Recommendation": "Review maintenance/reboot cadence. Long uptime can hide pending updates or service issues."
+    }
+  ]
+}

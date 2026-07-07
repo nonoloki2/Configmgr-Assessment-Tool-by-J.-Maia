@@ -1,7 +1,7 @@
 <#
  ConfigMgr Assessment Tool by J. Maia
- Version 1.1.3-alpha | Build 0008
- Phase: Professional Foundation
+ Version 1.2.0-alpha | Build 0009
+ Phase: Core Health Assessment
 #>
 [CmdletBinding()]
 param()
@@ -22,6 +22,7 @@ Import-Module (Join-Path $script:AppRoot 'Modules\Core\Common.psm1') -Force
 Import-Module (Join-Path $script:AppRoot 'Modules\Core\Logging.psm1') -Force
 Import-Module (Join-Path $script:AppRoot 'Modules\Core\Export.psm1') -Force
 Import-Module (Join-Path $script:AppRoot 'Modules\Engines\DiscoveryEngine.psm1') -Force
+Import-Module (Join-Path $script:AppRoot 'Modules\Engines\CoreHealthEngine.psm1') -Force
 Import-Module (Join-Path $script:AppRoot 'Modules\Engines\RuleEngine.psm1') -Force
 Import-Module (Join-Path $script:AppRoot 'Modules\UI\MainWindow.psm1') -Force
 
