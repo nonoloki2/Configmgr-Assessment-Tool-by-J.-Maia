@@ -1,0 +1,11 @@
+{
+  "ApplicationName": "ConfigMgr Assessment Tool by J. Maia",
+  "Version": "1.1.0-alpha",
+  "Build": "0005",
+  "Theme": "Light",
+  "TimeoutSeconds": 30,
+  "MaxThreads": 8,
+  "ExportFolder": "Output",
+  "LogLevel": "INFO",
+  "Language": "en-US"
+}

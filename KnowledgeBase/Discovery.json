@@ -1,0 +1,17 @@
+{
+  "module": "Discovery",
+  "rules": [
+    {
+      "id": "Connection.Failed",
+      "severity": "High",
+      "status": "Critical",
+      "recommendation": "Validate Site Code, SMS Provider server, RBAC permissions, firewall and WMI namespace availability."
+    },
+    {
+      "id": "Connection.Success",
+      "severity": "Info",
+      "status": "Healthy",
+      "recommendation": "No action required."
+    }
+  ]
+}

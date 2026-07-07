@@ -1,9 +1,12 @@
 # Changelog
 
-## v1.0.4-alpha
-- Fixed CSV export failure caused by long nested paths.
-- Shortened CSV filename.
-- Added TEMP fallback for CSV export.
+## v1.1.0-alpha Build 0005
 
-## v1.0.3-alpha
-- Startup folder creation and logging fallback.
+- Rebuilt UI with professional Grid layout.
+- Fixed textbox clipping issue for Site Code and SMS Provider.
+- Added Discovery Summary dashboard.
+- Added Topology TreeView.
+- Added structured session object and inventory model.
+- Added RuleEngine and KnowledgeBase skeleton.
+- Improved CSV export schema.
+- Improved logging folder structure and fallback safety.
