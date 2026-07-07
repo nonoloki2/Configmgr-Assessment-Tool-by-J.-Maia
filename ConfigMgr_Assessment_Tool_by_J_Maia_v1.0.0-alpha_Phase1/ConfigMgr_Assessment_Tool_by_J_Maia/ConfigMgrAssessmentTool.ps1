@@ -1,237 +1,317 @@
 # ConfigMgr Assessment Tool by J. Maia
-# Version: 1.0.0-alpha - Phase 1
-# Purpose: GUI base, Discovery, logging and CSV export.
+# Version: 1.0.0-alpha - Phase 1 Fixed MVP
 
-Add-Type -AssemblyName PresentationFramework
-Add-Type -AssemblyName PresentationCore
-Add-Type -AssemblyName WindowsBase
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
 
-$Script:BasePath = Split-Path -Parent $MyInvocation.MyCommand.Path
-$Script:ModulesPath = Join-Path $Script:BasePath 'Modules'
-$Script:OutputCsvPath = Join-Path $Script:BasePath 'Output\CSV'
-$Script:OutputLogPath = Join-Path $Script:BasePath 'Output\Logs'
-$Script:AssessmentId = [guid]::NewGuid().ToString()
-$Script:Results = New-Object System.Collections.Generic.List[object]
-$Script:LastCsv = $null
-$Script:LastLog = $null
+$Script:ToolRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$Script:ModulesPath = Join-Path $Script:ToolRoot 'Modules'
+$Script:OutputPath = Join-Path $Script:ToolRoot 'Output'
+$Script:CsvPath = Join-Path $Script:OutputPath 'CSV'
+$Script:LogPath = Join-Path $Script:OutputPath 'Logs'
+
+foreach ($folder in @($Script:OutputPath, $Script:CsvPath, $Script:LogPath)) {
+    if (-not (Test-Path $folder)) { New-Item -ItemType Directory -Path $folder -Force | Out-Null }
+}
 
 Import-Module (Join-Path $Script:ModulesPath 'Common.psm1') -Force
-Import-Module (Join-Path $Script:ModulesPath 'Logging.psm1') -Force
 Import-Module (Join-Path $Script:ModulesPath 'Export.psm1') -Force
 Import-Module (Join-Path $Script:ModulesPath 'Discovery.psm1') -Force
 
-Ensure-Directory -Path $Script:OutputCsvPath
-Ensure-Directory -Path $Script:OutputLogPath
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
 
-[xml]$xaml = @"
-<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="ConfigMgr Assessment Tool by J. Maia" Height="720" Width="980"
-        WindowStartupLocation="CenterScreen" ResizeMode="CanResize">
-    <Grid Margin="16">
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="*"/>
-            <RowDefinition Height="Auto"/>
-        </Grid.RowDefinitions>
+$Script:AssessmentId = ([guid]::NewGuid()).Guid.ToUpper()
+$Script:Results = New-Object System.Collections.Generic.List[object]
+$Script:CurrentLogFile = Join-Path $Script:LogPath "ConfigMgr_Assessment_$((Get-Date).ToString('yyyyMMdd_HHmmss'))_$($Script:AssessmentId).log"
+$Script:LastCsvFile = $null
 
-        <Border Grid.Row="0" Padding="14" BorderBrush="#BDBDBD" BorderThickness="1" CornerRadius="8">
-            <StackPanel>
-                <TextBlock Text="ConfigMgr Assessment Tool by J. Maia" FontSize="26" FontWeight="Bold"/>
-                <TextBlock Text="Version 1.0.0-alpha | Phase 1 - Base, Discovery, Logging and CSV Export" FontSize="13" Margin="0,4,0,0"/>
-                <TextBlock Name="TxtAssessmentId" FontSize="12" Margin="0,8,0,0"/>
-            </StackPanel>
-        </Border>
-
-        <Border Grid.Row="1" Padding="14" Margin="0,12,0,0" BorderBrush="#BDBDBD" BorderThickness="1" CornerRadius="8">
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="120"/>
-                    <ColumnDefinition Width="220"/>
-                    <ColumnDefinition Width="130"/>
-                    <ColumnDefinition Width="*"/>
-                </Grid.ColumnDefinitions>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                </Grid.RowDefinitions>
-
-                <TextBlock Grid.Row="0" Grid.Column="0" Text="Site Code:" VerticalAlignment="Center" FontWeight="SemiBold"/>
-                <TextBox Grid.Row="0" Grid.Column="1" Name="TxtSiteCode" Height="28" Margin="0,0,18,0" ToolTip="Example: PR1"/>
-                <TextBlock Grid.Row="0" Grid.Column="2" Text="SMS Provider:" VerticalAlignment="Center" FontWeight="SemiBold"/>
-                <TextBox Grid.Row="0" Grid.Column="3" Name="TxtProvider" Height="28" ToolTip="Server hosting SMS Provider. Often the Primary Site Server."/>
-
-                <TextBlock Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="4" Margin="0,10,0,0" Text="Tip: use the SMS Provider server. In many environments this is the Primary Site Server, but it can be installed on a different server." TextWrapping="Wrap"/>
-            </Grid>
-        </Border>
-
-        <Border Grid.Row="2" Padding="14" Margin="0,12,0,0" BorderBrush="#BDBDBD" BorderThickness="1" CornerRadius="8">
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="*"/>
-                </Grid.ColumnDefinitions>
-                <Button Name="BtnDiscovery" Grid.Column="0" Content="Run Discovery" Width="140" Height="34" Margin="0,0,10,0"/>
-                <Button Name="BtnExport" Grid.Column="1" Content="Export CSV" Width="120" Height="34" Margin="0,0,10,0" IsEnabled="False"/>
-                <Button Name="BtnClear" Grid.Column="2" Content="Clear Log" Width="100" Height="34" Margin="0,0,10,0"/>
-                <Button Name="BtnExit" Grid.Column="3" Content="Exit" Width="90" Height="34"/>
-            </Grid>
-        </Border>
-
-        <Grid Grid.Row="3" Margin="0,12,0,0">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="300"/>
-                <ColumnDefinition Width="12"/>
-                <ColumnDefinition Width="*"/>
-            </Grid.ColumnDefinitions>
-
-            <Border Grid.Column="0" Padding="14" BorderBrush="#BDBDBD" BorderThickness="1" CornerRadius="8">
-                <StackPanel>
-                    <TextBlock Text="Modules" FontSize="17" FontWeight="Bold" Margin="0,0,0,8"/>
-                    <CheckBox Name="ChkDiscovery" Content="Discovery" IsChecked="True" IsEnabled="False" Margin="0,4,0,4"/>
-                    <CheckBox Name="ChkCore" Content="Core Health - Coming soon" IsEnabled="False" Margin="0,4,0,4"/>
-                    <CheckBox Name="ChkComponent" Content="Component Status - Coming soon" IsEnabled="False" Margin="0,4,0,4"/>
-                    <CheckBox Name="ChkRoles" Content="Role Assessment - Coming soon" IsEnabled="False" Margin="0,4,0,4"/>
-                    <CheckBox Name="ChkWSUS" Content="SUP / WSUS - Coming soon" IsEnabled="False" Margin="0,4,0,4"/>
-                    <CheckBox Name="ChkDistribution" Content="Distribution Content Status - Coming soon" IsEnabled="False" Margin="0,4,0,4"/>
-                    <CheckBox Name="ChkSQL" Content="SQL Assessment - Separate phase" IsEnabled="False" Margin="0,4,0,4"/>
-                    <Separator Margin="0,12,0,12"/>
-                    <TextBlock Text="Current Phase" FontWeight="Bold"/>
-                    <TextBlock Text="Phase 1: validates inputs, ping, WinRM, SMS Provider namespace, site metadata and site system roles." TextWrapping="Wrap" Margin="0,4,0,0"/>
-                </StackPanel>
-            </Border>
-
-            <Border Grid.Column="2" Padding="14" BorderBrush="#BDBDBD" BorderThickness="1" CornerRadius="8">
-                <Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="*"/>
-                    </Grid.RowDefinitions>
-                    <Grid Grid.Row="0">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="180"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Text="Execution Log" FontSize="17" FontWeight="Bold"/>
-                        <TextBlock Name="TxtElapsed" Grid.Column="1" Text="Elapsed: 00:00:00" HorizontalAlignment="Right"/>
-                    </Grid>
-                    <ProgressBar Name="ProgressBar" Grid.Row="1" Height="20" Minimum="0" Maximum="100" Value="0" Margin="0,10,0,10"/>
-                    <TextBox Name="TxtLog" Grid.Row="2" FontFamily="Consolas" FontSize="12" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" TextWrapping="NoWrap" IsReadOnly="True" AcceptsReturn="True"/>
-                </Grid>
-            </Border>
-        </Grid>
-
-        <StatusBar Grid.Row="4" Margin="0,12,0,0">
-            <StatusBarItem>
-                <TextBlock Name="TxtStatus" Text="Ready."/>
-            </StatusBarItem>
-        </StatusBar>
-    </Grid>
-</Window>
-"@
-
-$reader = New-Object System.Xml.XmlNodeReader $xaml
-$window = [Windows.Markup.XamlReader]::Load($reader)
-
-$TxtAssessmentId = $window.FindName('TxtAssessmentId')
-$TxtSiteCode     = $window.FindName('TxtSiteCode')
-$TxtProvider     = $window.FindName('TxtProvider')
-$BtnDiscovery    = $window.FindName('BtnDiscovery')
-$BtnExport       = $window.FindName('BtnExport')
-$BtnClear        = $window.FindName('BtnClear')
-$BtnExit         = $window.FindName('BtnExit')
-$TxtLog          = $window.FindName('TxtLog')
-$TxtStatus       = $window.FindName('TxtStatus')
-$TxtElapsed      = $window.FindName('TxtElapsed')
-$ProgressBar     = $window.FindName('ProgressBar')
-
-$TxtAssessmentId.Text = "Assessment ID: $Script:AssessmentId"
-
-function Add-UILog {
-    param(
-        [string]$Message,
-        [ValidateSet('INFO','WARN','ERROR','SUCCESS')]
-        [string]$Level = 'INFO'
-    )
-    $line = Write-CATLog -Message $Message -Level $Level
-    $TxtLog.AppendText($line + [Environment]::NewLine)
-    $TxtLog.ScrollToEnd()
-    $TxtStatus.Text = $Message
-    [System.Windows.Forms.Application]::DoEvents() | Out-Null
+function Write-UiLog {
+    param([string]$Message)
+    $timestamp = (Get-Date).ToString('HH:mm:ss')
+    $line = "[$timestamp] $Message"
+    Add-Content -Path $Script:CurrentLogFile -Value $line -Encoding UTF8
+    $txtLog.AppendText($line + [Environment]::NewLine)
+    $txtLog.SelectionStart = $txtLog.TextLength
+    $txtLog.ScrollToCaret()
+    [System.Windows.Forms.Application]::DoEvents()
 }
 
-try { Add-Type -AssemblyName System.Windows.Forms } catch {}
+function Set-UiProgress {
+    param([int]$Percent, [string]$Activity)
+    if ($Percent -lt 0) { $Percent = 0 }
+    if ($Percent -gt 100) { $Percent = 100 }
+    $progress.Value = $Percent
+    $lblCurrentTask.Text = "Current task: $Activity"
+    [System.Windows.Forms.Application]::DoEvents()
+}
 
-$BtnClear.Add_Click({
-    $TxtLog.Clear()
-})
-
-$BtnExit.Add_Click({
-    $window.Close()
-})
-
-$BtnExport.Add_Click({
-    if ($Script:Results.Count -eq 0) {
-        [System.Windows.MessageBox]::Show('No results to export yet.', 'ConfigMgr Assessment Tool by J. Maia', 'OK', 'Information') | Out-Null
-        return
+function Refresh-ResultsGrid {
+    $grid.Rows.Clear()
+    foreach ($r in $Script:Results) {
+        [void]$grid.Rows.Add($r.Status, $r.Category, $r.Check, $r.TargetServer, $r.Role, $r.Finding)
     }
-    try {
-        $siteCode = $TxtSiteCode.Text.Trim().ToUpper()
-        $Script:LastCsv = Export-CATCsv -Results $Script:Results.ToArray() -OutputDirectory $Script:OutputCsvPath -AssessmentId $Script:AssessmentId -SiteCode $siteCode
-        Add-UILog "CSV exported: $Script:LastCsv" 'SUCCESS'
-        [System.Windows.MessageBox]::Show("CSV exported successfully:`n$Script:LastCsv", 'Export CSV', 'OK', 'Information') | Out-Null
-    } catch {
-        Add-UILog "CSV export failed: $($_.Exception.Message)" 'ERROR'
-        [System.Windows.MessageBox]::Show("CSV export failed:`n$($_.Exception.Message)", 'Export CSV', 'OK', 'Error') | Out-Null
-    }
-})
+}
 
-$BtnDiscovery.Add_Click({
-    $BtnDiscovery.IsEnabled = $false
-    $BtnExport.IsEnabled = $false
-    $ProgressBar.Value = 0
-    $Script:AssessmentId = [guid]::NewGuid().ToString()
-    $TxtAssessmentId.Text = "Assessment ID: $Script:AssessmentId"
-    $Script:Results.Clear()
+function Refresh-TopologyTree {
+    $tree.Nodes.Clear()
+    $siteCode = $txtSiteCode.Text.Trim().ToUpper()
+    $root = New-Object System.Windows.Forms.TreeNode("SITE $siteCode")
+    [void]$tree.Nodes.Add($root)
 
-    $start = Get-Date
-    $Script:LastLog = Initialize-CATLog -LogDirectory $Script:OutputLogPath -AssessmentId $Script:AssessmentId
-
-    try {
-        Add-UILog 'Starting Discovery module...' 'INFO'
-        $ProgressBar.Value = 10
-
-        $siteCode = $TxtSiteCode.Text.Trim().ToUpper()
-        $provider = $TxtProvider.Text.Trim()
-
-        $logger = {
-            param($Message, $Level)
-            Add-UILog -Message $Message -Level $Level
-            $elapsed = (Get-Date) - $start
-            $TxtElapsed.Text = ('Elapsed: {0:hh\:mm\:ss}' -f $elapsed)
+    $roleRows = $Script:Results | Where-Object { $_.Category -eq 'Site System Role' -and $_.Check -eq 'Role Discovered' }
+    $servers = $roleRows | Group-Object TargetServer | Sort-Object Name
+    foreach ($server in $servers) {
+        $serverNode = New-Object System.Windows.Forms.TreeNode($server.Name)
+        [void]$root.Nodes.Add($serverNode)
+        foreach ($roleItem in ($server.Group | Sort-Object Role)) {
+            [void]$serverNode.Nodes.Add((New-Object System.Windows.Forms.TreeNode($roleItem.Role)))
         }
-
-        $ProgressBar.Value = 25
-        $discoveryResults = Invoke-CATDiscovery -SiteCode $siteCode -ProviderServer $provider -AssessmentId $Script:AssessmentId -Logger $logger
-        foreach ($item in $discoveryResults) { [void]$Script:Results.Add($item) }
-
-        $ProgressBar.Value = 100
-        $elapsed = (Get-Date) - $start
-        $TxtElapsed.Text = ('Elapsed: {0:hh\:mm\:ss}' -f $elapsed)
-        Add-UILog "Discovery finished. Results collected: $($Script:Results.Count). Log: $Script:LastLog" 'SUCCESS'
-        $BtnExport.IsEnabled = $true
-    } catch {
-        Add-UILog "Unexpected error: $($_.Exception.Message)" 'ERROR'
-        [System.Windows.MessageBox]::Show("Unexpected error:`n$($_.Exception.Message)", 'Discovery Error', 'OK', 'Error') | Out-Null
-    } finally {
-        $BtnDiscovery.IsEnabled = $true
     }
-})
+    $tree.ExpandAll()
+}
 
-$null = $window.ShowDialog()
+function Update-Summary {
+    $critical = ($Script:Results | Where-Object Status -eq 'Critical' | Measure-Object).Count
+    $warning = ($Script:Results | Where-Object Status -eq 'Warning' | Measure-Object).Count
+    $healthy = ($Script:Results | Where-Object Status -eq 'Healthy' | Measure-Object).Count
+    $info = ($Script:Results | Where-Object Status -eq 'Info' | Measure-Object).Count
+    $servers = ($Script:Results | Where-Object { $_.Category -eq 'Site System Role' } | Select-Object -ExpandProperty TargetServer -Unique | Measure-Object).Count
+    $roles = ($Script:Results | Where-Object { $_.Category -eq 'Site System Role' } | Measure-Object).Count
+    $lblSummary.Text = "Healthy: $healthy | Warnings: $warning | Critical: $critical | Info: $info | Servers: $servers | Role instances: $roles"
+}
+
+function Run-DiscoveryButtonClick {
+    try {
+        $btnDiscovery.Enabled = $false
+        $btnExport.Enabled = $false
+        $Script:AssessmentId = ([guid]::NewGuid()).Guid.ToUpper()
+        $Script:CurrentLogFile = Join-Path $Script:LogPath "ConfigMgr_Assessment_$((Get-Date).ToString('yyyyMMdd_HHmmss'))_$($Script:AssessmentId).log"
+        $Script:Results.Clear()
+        $txtLog.Clear()
+        $grid.Rows.Clear()
+        $tree.Nodes.Clear()
+        $lblAssessmentId.Text = "Assessment ID: $($Script:AssessmentId)"
+        $lblCsv.Text = 'CSV: not exported yet'
+        Set-UiProgress 0 'Starting'
+        Write-UiLog '============================================================'
+        Write-UiLog 'ConfigMgr Assessment Tool by J. Maia - Discovery started'
+        Write-UiLog "Log file: $Script:CurrentLogFile"
+
+        $siteCode = $txtSiteCode.Text.Trim()
+        $provider = $txtProvider.Text.Trim()
+
+        $discoveryResults = Invoke-ConfigMgrDiscovery -SiteCode $siteCode -ProviderServer $provider -AssessmentId $Script:AssessmentId -LogCallback { param($m) Write-UiLog $m } -ProgressCallback { param($p,$a) Set-UiProgress $p $a }
+        foreach ($item in $discoveryResults) { $Script:Results.Add($item) }
+
+        Refresh-ResultsGrid
+        Refresh-TopologyTree
+        Update-Summary
+
+        $Script:LastCsvFile = Export-AssessmentCsv -Results $Script:Results -OutputFolder $Script:CsvPath -AssessmentId $Script:AssessmentId
+        $lblCsv.Text = "CSV: $Script:LastCsvFile"
+        $btnExport.Enabled = $true
+        Write-UiLog "CSV exported automatically: $Script:LastCsvFile"
+        Write-UiLog 'Discovery finished.'
+        Set-UiProgress 100 'Done'
+    }
+    catch {
+        Write-UiLog "UNHANDLED ERROR: $($_.Exception.Message)"
+        [System.Windows.Forms.MessageBox]::Show("Discovery failed: $($_.Exception.Message)", 'ConfigMgr Assessment Tool by J. Maia', 'OK', 'Error') | Out-Null
+    }
+    finally {
+        $btnDiscovery.Enabled = $true
+    }
+}
+
+function Export-ButtonClick {
+    try {
+        if ($Script:Results.Count -eq 0) {
+            [System.Windows.Forms.MessageBox]::Show('There are no results to export. Run Discovery first.', 'Export CSV', 'OK', 'Information') | Out-Null
+            return
+        }
+        $path = Export-AssessmentCsv -Results $Script:Results -OutputFolder $Script:CsvPath -AssessmentId $Script:AssessmentId
+        $Script:LastCsvFile = $path
+        $lblCsv.Text = "CSV: $path"
+        Write-UiLog "CSV exported: $path"
+        [System.Windows.Forms.MessageBox]::Show("CSV exported:`n$path", 'Export CSV', 'OK', 'Information') | Out-Null
+    } catch {
+        Write-UiLog "EXPORT ERROR: $($_.Exception.Message)"
+        [System.Windows.Forms.MessageBox]::Show("Export failed: $($_.Exception.Message)", 'Export CSV', 'OK', 'Error') | Out-Null
+    }
+}
+
+$form = New-Object System.Windows.Forms.Form
+$form.Text = 'ConfigMgr Assessment Tool by J. Maia - v1.0.0-alpha Phase 1'
+$form.Size = New-Object System.Drawing.Size(1180, 760)
+$form.StartPosition = 'CenterScreen'
+$form.MinimumSize = New-Object System.Drawing.Size(1050, 650)
+
+$fontNormal = New-Object System.Drawing.Font('Segoe UI', 9)
+$fontTitle = New-Object System.Drawing.Font('Segoe UI', 14, [System.Drawing.FontStyle]::Bold)
+$form.Font = $fontNormal
+
+$lblTitle = New-Object System.Windows.Forms.Label
+$lblTitle.Text = 'ConfigMgr Assessment Tool by J. Maia'
+$lblTitle.Font = $fontTitle
+$lblTitle.AutoSize = $true
+$lblTitle.Location = New-Object System.Drawing.Point(15, 12)
+$form.Controls.Add($lblTitle)
+
+$lblVersion = New-Object System.Windows.Forms.Label
+$lblVersion.Text = 'Version 1.0.0-alpha | Phase 1 Fixed MVP'
+$lblVersion.AutoSize = $true
+$lblVersion.Location = New-Object System.Drawing.Point(18, 43)
+$form.Controls.Add($lblVersion)
+
+$lblAssessmentId = New-Object System.Windows.Forms.Label
+$lblAssessmentId.Text = "Assessment ID: $Script:AssessmentId"
+$lblAssessmentId.AutoSize = $true
+$lblAssessmentId.Location = New-Object System.Drawing.Point(18, 68)
+$form.Controls.Add($lblAssessmentId)
+
+$lblSiteCode = New-Object System.Windows.Forms.Label
+$lblSiteCode.Text = 'Site Code:'
+$lblSiteCode.AutoSize = $true
+$lblSiteCode.Location = New-Object System.Drawing.Point(20, 105)
+$form.Controls.Add($lblSiteCode)
+
+$txtSiteCode = New-Object System.Windows.Forms.TextBox
+$txtSiteCode.Location = New-Object System.Drawing.Point(95, 101)
+$txtSiteCode.Size = New-Object System.Drawing.Size(95, 25)
+$txtSiteCode.CharacterCasing = 'Upper'
+$form.Controls.Add($txtSiteCode)
+
+$lblProvider = New-Object System.Windows.Forms.Label
+$lblProvider.Text = 'SMS Provider:'
+$lblProvider.AutoSize = $true
+$lblProvider.Location = New-Object System.Drawing.Point(210, 105)
+$form.Controls.Add($lblProvider)
+
+$txtProvider = New-Object System.Windows.Forms.TextBox
+$txtProvider.Location = New-Object System.Drawing.Point(305, 101)
+$txtProvider.Size = New-Object System.Drawing.Size(330, 25)
+$form.Controls.Add($txtProvider)
+
+$btnDiscovery = New-Object System.Windows.Forms.Button
+$btnDiscovery.Text = 'Run Discovery'
+$btnDiscovery.Location = New-Object System.Drawing.Point(655, 99)
+$btnDiscovery.Size = New-Object System.Drawing.Size(130, 30)
+$btnDiscovery.Add_Click({ Run-DiscoveryButtonClick })
+$form.Controls.Add($btnDiscovery)
+
+$btnExport = New-Object System.Windows.Forms.Button
+$btnExport.Text = 'Export CSV'
+$btnExport.Location = New-Object System.Drawing.Point(795, 99)
+$btnExport.Size = New-Object System.Drawing.Size(110, 30)
+$btnExport.Enabled = $false
+$btnExport.Add_Click({ Export-ButtonClick })
+$form.Controls.Add($btnExport)
+
+$btnExit = New-Object System.Windows.Forms.Button
+$btnExit.Text = 'Exit'
+$btnExit.Location = New-Object System.Drawing.Point(915, 99)
+$btnExit.Size = New-Object System.Drawing.Size(85, 30)
+$btnExit.Add_Click({ $form.Close() })
+$form.Controls.Add($btnExit)
+
+$progress = New-Object System.Windows.Forms.ProgressBar
+$progress.Location = New-Object System.Drawing.Point(20, 145)
+$progress.Size = New-Object System.Drawing.Size(980, 20)
+$progress.Minimum = 0
+$progress.Maximum = 100
+$form.Controls.Add($progress)
+
+$lblCurrentTask = New-Object System.Windows.Forms.Label
+$lblCurrentTask.Text = 'Current task: Ready'
+$lblCurrentTask.AutoSize = $true
+$lblCurrentTask.Location = New-Object System.Drawing.Point(20, 170)
+$form.Controls.Add($lblCurrentTask)
+
+$tabs = New-Object System.Windows.Forms.TabControl
+$tabs.Location = New-Object System.Drawing.Point(20, 200)
+$tabs.Size = New-Object System.Drawing.Size(1120, 455)
+$tabs.Anchor = 'Top,Bottom,Left,Right'
+$form.Controls.Add($tabs)
+
+$tabResults = New-Object System.Windows.Forms.TabPage
+$tabResults.Text = 'Results'
+$tabs.TabPages.Add($tabResults)
+
+$grid = New-Object System.Windows.Forms.DataGridView
+$grid.Dock = 'Fill'
+$grid.AllowUserToAddRows = $false
+$grid.AllowUserToDeleteRows = $false
+$grid.ReadOnly = $true
+$grid.AutoSizeColumnsMode = 'Fill'
+$grid.RowHeadersVisible = $false
+[void]$grid.Columns.Add('Status','Status')
+[void]$grid.Columns.Add('Category','Category')
+[void]$grid.Columns.Add('Check','Check')
+[void]$grid.Columns.Add('TargetServer','Target Server')
+[void]$grid.Columns.Add('Role','Role')
+[void]$grid.Columns.Add('Finding','Finding')
+$tabResults.Controls.Add($grid)
+
+$tabTopology = New-Object System.Windows.Forms.TabPage
+$tabTopology.Text = 'Topology'
+$tabs.TabPages.Add($tabTopology)
+$tree = New-Object System.Windows.Forms.TreeView
+$tree.Dock = 'Fill'
+$tabTopology.Controls.Add($tree)
+
+$tabLog = New-Object System.Windows.Forms.TabPage
+$tabLog.Text = 'Execution Log'
+$tabs.TabPages.Add($tabLog)
+$txtLog = New-Object System.Windows.Forms.TextBox
+$txtLog.Multiline = $true
+$txtLog.ScrollBars = 'Vertical'
+$txtLog.Dock = 'Fill'
+$txtLog.ReadOnly = $true
+$txtLog.Font = New-Object System.Drawing.Font('Consolas', 9)
+$tabLog.Controls.Add($txtLog)
+
+$tabModules = New-Object System.Windows.Forms.TabPage
+$tabModules.Text = 'Future Modules'
+$tabs.TabPages.Add($tabModules)
+$futureText = New-Object System.Windows.Forms.TextBox
+$futureText.Multiline = $true
+$futureText.Dock = 'Fill'
+$futureText.ReadOnly = $true
+$futureText.Text = @'
+Planned modules for next phases:
+
+[ ] Core Health
+[ ] SCCM Component Status
+[ ] Role Assessment: MP / DP / SUP / Reporting / Service Connection Point
+[ ] SUP / WSUS Assessment
+[ ] Distribution Content Status
+[ ] SQL Assessment (separate permissions-sensitive module)
+
+Phase 1 acceptance criteria:
+- Run Discovery button must visibly execute.
+- Progress bar must move.
+- Log tab must show each action in real time.
+- Results tab must show validation, connectivity, SMS Provider and role discovery results.
+- Topology tab must show discovered site systems and roles.
+- CSV must be created under Output\CSV.
+- Log must be created under Output\Logs.
+'@
+$tabModules.Controls.Add($futureText)
+
+$lblSummary = New-Object System.Windows.Forms.Label
+$lblSummary.Text = 'Healthy: 0 | Warnings: 0 | Critical: 0 | Info: 0 | Servers: 0 | Role instances: 0'
+$lblSummary.AutoSize = $true
+$lblSummary.Location = New-Object System.Drawing.Point(20, 665)
+$lblSummary.Anchor = 'Bottom,Left'
+$form.Controls.Add($lblSummary)
+
+$lblCsv = New-Object System.Windows.Forms.Label
+$lblCsv.Text = 'CSV: not exported yet'
+$lblCsv.AutoSize = $true
+$lblCsv.Location = New-Object System.Drawing.Point(20, 690)
+$lblCsv.Anchor = 'Bottom,Left'
+$form.Controls.Add($lblCsv)
+
+Write-UiLog 'Application started. Fill Site Code and SMS Provider, then click Run Discovery.'
+[void]$form.ShowDialog()

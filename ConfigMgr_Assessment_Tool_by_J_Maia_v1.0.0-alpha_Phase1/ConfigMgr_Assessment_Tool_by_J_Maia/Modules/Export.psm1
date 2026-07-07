@@ -1,20 +1,20 @@
-function Export-CATCsv {
-    [CmdletBinding()]
+Set-StrictMode -Version Latest
+
+function Export-AssessmentCsv {
     param(
-        [Parameter(Mandatory)][object[]]$Results,
-        [Parameter(Mandatory)][string]$OutputDirectory,
-        [Parameter(Mandatory)][string]$AssessmentId,
-        [string]$SiteCode = 'UNKNOWN'
+        [Parameter(Mandatory)] [object[]]$Results,
+        [Parameter(Mandatory)] [string]$OutputFolder,
+        [Parameter(Mandatory)] [string]$AssessmentId
     )
 
-    if (-not (Test-Path -LiteralPath $OutputDirectory)) {
-        New-Item -Path $OutputDirectory -ItemType Directory -Force | Out-Null
+    if (-not (Test-Path $OutputFolder)) {
+        New-Item -ItemType Directory -Path $OutputFolder -Force | Out-Null
     }
 
-    $stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
-    $file = Join-Path $OutputDirectory "ConfigMgr_Assessment_${SiteCode}_${stamp}_${AssessmentId}.csv"
-    $Results | Export-Csv -Path $file -NoTypeInformation -Encoding UTF8
-    return $file
+    $fileName = "ConfigMgr_Assessment_Discovery_$((Get-Date).ToString('yyyyMMdd_HHmmss'))_$AssessmentId.csv"
+    $path = Join-Path $OutputFolder $fileName
+    $Results | Export-Csv -Path $path -NoTypeInformation -Encoding UTF8
+    return $path
 }
 
-Export-ModuleMember -Function Export-CATCsv
+Export-ModuleMember -Function Export-AssessmentCsv

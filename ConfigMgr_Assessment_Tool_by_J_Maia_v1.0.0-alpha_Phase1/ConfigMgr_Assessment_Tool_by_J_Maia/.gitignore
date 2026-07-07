@@ -1,0 +1,6 @@
+Output/CSV/*.csv
+Output/Logs/*.log
+*.tmp
+*.bak
+.vscode/
+.idea/
