@@ -1,6 +1,6 @@
 <#
  ConfigMgr Assessment Tool by J. Maia
- Version 2.0.1-alpha | Build 0014
+ Version 2.0.2-alpha | Build 0015
  Phase: MP Connectivity, Services and IIS Prerequisites
 #>
 [CmdletBinding()]

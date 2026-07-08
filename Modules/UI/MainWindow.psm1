@@ -443,6 +443,12 @@ function Show-CATMainWindow {
                 [System.Windows.MessageBox]::Show('Run Discovery/Core Health before generating the HTML report.', 'HTML Report', 'OK', 'Warning') | Out-Null
                 return
             }
+            $mpRoleCount = @($Session.Inventory.Roles | Where-Object { $_.RoleName -like '*Management Point*' }).Count
+            $mpResultCount = @($Session.Results | Where-Object { $_.Module -eq 'ManagementPoint' }).Count
+            if ($mpRoleCount -gt 0 -and $mpResultCount -eq 0) {
+                [System.Windows.MessageBox]::Show('Management Point role(s) were discovered, but the MP assessment results are not present yet. Click Run MP before generating the HTML report, otherwise the Management Point tab will be empty.', 'Run MP first', 'OK', 'Warning') | Out-Null
+                return
+            }
             Add-UiLog 'Generating HTML report.'
             $html = Export-CATHtmlReport -Session $Session
             $ui.btnOpenOutput.IsEnabled = $true
