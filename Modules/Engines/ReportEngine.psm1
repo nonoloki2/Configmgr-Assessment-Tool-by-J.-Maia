@@ -141,6 +141,7 @@ function Export-CATHtmlReport {
         $mpCertRows = Convert-CATResultToRows @($srvMpResults | Where-Object Category -eq 'Certificates')
         $mpLogRows = Convert-CATResultToRows @($srvMpResults | Where-Object Category -eq 'Logs')
         $mpLiveRows = Convert-CATResultToRows @($srvMpResults | Where-Object Category -eq 'Live Test')
+        $mpEvidenceRows = Convert-CATResultToRows @($srvMpResults | Where-Object Category -eq 'Evidence')
 
         if((($roles -join " ") -like "*Management Point*") -and @($srvMpResults).Count -eq 0){
             $mpNotRun = @([pscustomobject]@{
@@ -206,6 +207,8 @@ function Export-CATHtmlReport {
       $(New-CATReportTable -Rows $mpCertRows -Columns @('Check','Status','Value','Finding','Recommendation','Evidence'))
       <h4>Management Point - Logs and Live Tests</h4>
       $(New-CATReportTable -Rows (@($mpLogRows) + @($mpLiveRows)) -Columns @('Check','Status','Value','Finding','Recommendation','Evidence'))
+      <h4>Management Point - Evidence Mode</h4>
+      $(New-CATReportTable -Rows $mpEvidenceRows -Columns @('Check','Status','Value','Finding','Recommendation','Evidence'))
       <h4>Management Point - All Evidence</h4>
       $(New-CATReportTable -Rows (@($mpRows)+@($mpNotRun)) -Columns @('Check','Status','Value','Finding','Recommendation','Evidence'))
     </div>
@@ -231,7 +234,7 @@ function Export-CATHtmlReport {
 <body>
 <header>
   <h1>ConfigMgr Assessment Tool by J. Maia</h1>
-  <div class="subtitle">Version 2.0.2-alpha | Build 0015 | Assessment ID: $(ConvertTo-CATHtmlEncoded $Session.AssessmentID) | Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')</div>
+  <div class="subtitle">Version 2.0.3-alpha | Build 0016 | Assessment ID: $(ConvertTo-CATHtmlEncoded $Session.AssessmentID) | Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')</div>
 </header>
 <div class="layout">
   <aside class="side">

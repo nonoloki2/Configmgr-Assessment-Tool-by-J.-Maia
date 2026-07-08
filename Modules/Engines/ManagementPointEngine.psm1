@@ -92,12 +92,18 @@ function Invoke-CATManagementPointAssessment {
                     $filter = "Name='$svcName'"
                     $svc = Get-CimInstance -ComputerName $server -ClassName Win32_Service -Filter $filter -ErrorAction Stop
                     if($null -eq $svc){ throw "Service $svcName not found." }
+                    $svcValue = ("State={0}; StartMode={1}; Account={2}" -f $svc.State,$svc.StartMode,$svc.StartName)
+                    $svcEvidence = ("Name={0}; DisplayName={1}; State={2}; StartMode={3}; Account={4}" -f $svc.Name,$svc.DisplayName,$svc.State,$svc.StartMode,$svc.StartName)
                     if($svc.State -eq 'Running'){
-                        Add-MPResult -Category 'Services' -Check ("Service {0}" -f $svcName) -Target $server -Value $svc.State -Status 'Healthy' -Finding 'Required service is running.' -Recommendation 'No action required.' -Evidence ("Name={0}; State={1}; StartMode={2}" -f $svc.Name,$svc.State,$svc.StartMode) -Source 'Win32_Service' -RuleId 'MP-SVC-001'
+                        Add-MPResult -Category 'Services' -Check ("Service {0}" -f $svcName) -Target $server -Value $svcValue -Status 'Healthy' -Finding 'Required service is running.' -Recommendation 'No action required.' -Evidence $svcEvidence -Source 'Win32_Service' -RuleId 'MP-SVC-001'
                     } else {
-                        $sev = if($svcName -in @('SMS_EXECUTIVE','W3SVC')){'High'}else{'Medium'}
-                        $status = if($svcName -in @('SMS_EXECUTIVE','W3SVC')){'Critical'}else{'Warning'}
-                        Add-MPResult -Category 'Services' -Check ("Service {0}" -f $svcName) -Target $server -Value $svc.State -Status $status -Severity $sev -Impact $sev -Finding 'Required service is not running.' -Recommendation 'Start the service and review related Windows/System and ConfigMgr logs.' -Evidence ("Name={0}; State={1}; StartMode={2}" -f $svc.Name,$svc.State,$svc.StartMode) -Source 'Win32_Service' -RuleId 'MP-SVC-001'
+                        if($svcName -eq 'BITS' -and $svc.StartMode -match 'Manual'){
+                            Add-MPResult -Category 'Services' -Check ("Service {0}" -f $svcName) -Target $server -Value $svcValue -Status 'Healthy' -Severity 'Info' -Impact 'Low' -Finding 'BITS is stopped, but this can be normal when no transfer is active and the service is manual/trigger-start.' -Recommendation 'No action required unless content transfer or client communication symptoms are present.' -Evidence $svcEvidence -Source 'Win32_Service' -RuleId 'MP-SVC-BITS-001'
+                        } else {
+                            $sev = if($svcName -in @('SMS_EXECUTIVE','W3SVC')){'High'}else{'Medium'}
+                            $status = if($svcName -in @('SMS_EXECUTIVE','W3SVC')){'Critical'}else{'Warning'}
+                            Add-MPResult -Category 'Services' -Check ("Service {0}" -f $svcName) -Target $server -Value $svcValue -Status $status -Severity $sev -Impact $sev -Finding 'Required service is not running.' -Recommendation 'Start the service and review related Windows/System and ConfigMgr logs.' -Evidence $svcEvidence -Source 'Win32_Service' -RuleId 'MP-SVC-001'
+                        }
                     }
                 } catch {
                     Add-MPResult -Category 'Services' -Check ("Service {0}" -f $svcName) -Target $server -Value 'UnableToCheck' -Status 'UnableToCheck' -Severity 'Medium' -Impact 'Medium' -Finding 'Unable to query required service.' -Recommendation 'Validate CIM permissions and remote service query access.' -Evidence $_.Exception.Message -Source 'Win32_Service' -RuleId 'MP-SVC-001'
@@ -190,7 +196,7 @@ function Invoke-CATManagementPointAssessment {
                 Add-MPResult -Category 'Certificates' -Check 'Machine Certificates' -Target $server -Value 'UnableToCheck' -Status 'UnableToCheck' -Severity 'Medium' -Impact 'Medium' -Finding 'Unable to query certificate store.' -Recommendation 'Validate remote PowerShell permissions and certificate provider access.' -Evidence $_.Exception.Message -Source 'Cert:\LocalMachine\My' -RuleId 'MP-CERT-001'
             }
 
-            # MPControl.log evidence
+            # MPControl.log evidence mode
             try {
                 $logInfo = Invoke-Command -ComputerName $server -ScriptBlock {
                     $candidates = New-Object System.Collections.Generic.List[string]
@@ -201,17 +207,90 @@ function Invoke-CATManagementPointAssessment {
                     $candidates.Add('C:\Program Files\Microsoft Configuration Manager\Logs\MPControl.log')
                     $candidates.Add('C:\SMS_CCM\Logs\MPControl.log')
                     $path = $candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
-                    if(-not $path){ return [pscustomobject]@{ Found=$false; Path=''; Summary='MPControl.log was not found.' } }
-                    $tail = @(Get-Content -LiteralPath $path -Tail 120 -ErrorAction Stop)
-                    $bad = @($tail | Where-Object { $_ -match '(?i)error|failed|unhealthy|status code 5|status code 4|not responding' })
-                    $good = @($tail | Where-Object { $_ -match '(?i)success|healthy|successfully' })
-                    [pscustomobject]@{ Found=$true; Path=$path; BadCount=$bad.Count; GoodCount=$good.Count; Sample=(($bad | Select-Object -Last 3) -join ' || ') }
+                    if(-not $path){ return [pscustomobject]@{ Found=$false; Path=''; Overall='Warning'; Summary='MPControl.log was not found.'; Evidence='No MPControl.log found in common locations.'; CriticalCount=0; WarningCount=0; SuccessCount=0; LatestSignal='NotFound' } }
+
+                    $tail = @(Get-Content -LiteralPath $path -Tail 500 -ErrorAction Stop)
+                    $criticalPatterns = @(
+                        'HttpSendRequestSync.*failed',
+                        'status code is 500',
+                        'status code 500',
+                        'status code is 503',
+                        'status code 503',
+                        'status code is 404',
+                        'status code 404',
+                        'MP is unhealthy',
+                        'not responding',
+                        'failed to connect',
+                        'Call to HttpSendRequestSync failed'
+                    )
+                    $warningPatterns = @(
+                        'status code is 401',
+                        'status code 401',
+                        'status code is 403',
+                        'status code 403',
+                        'retry',
+                        'warning'
+                    )
+                    $successPatterns = @(
+                        'HttpSendRequestSync.*succeeded',
+                        'Call to HttpSendRequestSync succeeded',
+                        'successfully performed.*availability',
+                        'Management Point.*responding',
+                        'Status code 200',
+                        'MP Control Manager detected.*responding'
+                    )
+                    $signals = New-Object System.Collections.Generic.List[object]
+                    for($i=0; $i -lt $tail.Count; $i++){
+                        $line = [string]$tail[$i]
+                        foreach($pat in $criticalPatterns){ if($line -match $pat){ $signals.Add([pscustomobject]@{ Index=$i; Type='Critical'; Pattern=$pat; Line=$line }) ; break } }
+                        foreach($pat in $warningPatterns){ if($line -match $pat){ $signals.Add([pscustomobject]@{ Index=$i; Type='Warning'; Pattern=$pat; Line=$line }) ; break } }
+                        foreach($pat in $successPatterns){ if($line -match $pat){ $signals.Add([pscustomobject]@{ Index=$i; Type='Healthy'; Pattern=$pat; Line=$line }) ; break } }
+                    }
+                    $critical = @($signals | Where-Object Type -eq 'Critical')
+                    $warning = @($signals | Where-Object Type -eq 'Warning')
+                    $success = @($signals | Where-Object Type -eq 'Healthy')
+                    $latest = @($signals | Sort-Object Index | Select-Object -Last 1)
+                    $overall = 'UnableToCheck'
+                    if($latest){
+                        if($latest.Type -eq 'Critical'){ $overall = 'Critical' }
+                        elseif($latest.Type -eq 'Warning'){ $overall = 'Warning' }
+                        elseif($latest.Type -eq 'Healthy'){
+                            if($critical.Count -gt 0 -or $warning.Count -gt 0){ $overall = 'HealthyWithHistoricalErrors' } else { $overall = 'Healthy' }
+                        }
+                    } elseif($tail.Count -gt 0){ $overall = 'Info' }
+                    $samples = @($signals | Sort-Object Index | Select-Object -Last 5 | ForEach-Object { "[{0}] {1}: {2}" -f $_.Type,$_.Pattern,$_.Line }) -join ' || '
+                    [pscustomobject]@{
+                        Found=$true; Path=$path; Overall=$overall; Summary="Critical=$($critical.Count); Warning=$($warning.Count); Success=$($success.Count); TailLines=$($tail.Count)"; Evidence=$samples; CriticalCount=$critical.Count; WarningCount=$warning.Count; SuccessCount=$success.Count; LatestSignal= if($latest){$latest.Type}else{'None'}
+                    }
                 } -ErrorAction Stop
+
                 if(-not $logInfo.Found){
-                    Add-MPResult -Category 'Logs' -Check 'MPControl.log' -Target $server -Value 'Not found' -Status 'Warning' -Severity 'Medium' -Impact 'Medium' -Finding 'MPControl.log was not found in common locations.' -Recommendation 'Validate ConfigMgr installation path and MP role installation.' -Evidence $logInfo.Summary -Source 'MPControl.log' -RuleId 'MP-LOG-001'
-                } elseif([int]$logInfo.BadCount -gt 0){
-                    Add-MPResult -Category 'Logs' -Check 'MPControl.log' -Target $server -Value ("{0} suspicious line(s) in last 120 lines" -f $logInfo.BadCount) -Status 'Warning' -Severity 'Medium' -Impact 'Medium' -Finding 'MPControl.log contains recent warning/error indicators.' -Recommendation 'Review MPControl.log and correlate with IIS, certificates and MP availability tests.' -Evidence ("Path={0}; Sample={1}" -f $logInfo.Path,$logInfo.Sample) -Source 'MPControl.log' -RuleId 'MP-LOG-001'
+                    Add-MPResult -Category 'Logs' -Check 'MPControl.log Availability' -Target $server -Value 'Not found' -Status 'Warning' -Severity 'Medium' -Impact 'Medium' -Finding 'MPControl.log was not found in common locations.' -Recommendation 'Validate ConfigMgr installation path and Management Point role installation.' -Evidence $logInfo.Evidence -Source 'MPControl.log' -RuleId 'MP-LOG-001'
                 } else {
+                    switch ($logInfo.Overall) {
+                        'Critical' {
+                            Add-MPResult -Category 'Logs' -Check 'MPControl.log Availability' -Target $server -Value $logInfo.Summary -Status 'Critical' -Severity 'High' -Impact 'High' -Finding 'The latest MPControl.log signal indicates a Management Point availability failure.' -Recommendation 'Review MPControl.log, IIS bindings, certificate state, HTTP status codes, firewall and MP availability tests.' -Evidence ("Path={0}; LatestSignal={1}; {2}" -f $logInfo.Path,$logInfo.LatestSignal,$logInfo.Evidence) -Source 'MPControl.log' -RuleId 'MP-LOG-CRITICAL-001'
+                        }
+                        'Warning' {
+                            Add-MPResult -Category 'Logs' -Check 'MPControl.log Availability' -Target $server -Value $logInfo.Summary -Status 'Warning' -Severity 'Medium' -Impact 'Medium' -Finding 'The latest MPControl.log signal indicates a warning condition.' -Recommendation 'Review MPControl.log and correlate with IIS authentication, client communication mode and endpoint tests.' -Evidence ("Path={0}; LatestSignal={1}; {2}" -f $logInfo.Path,$logInfo.LatestSignal,$logInfo.Evidence) -Source 'MPControl.log' -RuleId 'MP-LOG-WARNING-001'
+                        }
+                        'HealthyWithHistoricalErrors' {
+                            Add-MPResult -Category 'Logs' -Check 'MPControl.log Availability' -Target $server -Value $logInfo.Summary -Status 'Healthy' -Severity 'Info' -Impact 'Low' -Finding 'MPControl.log contains historical warning/error indicators, but the latest detected signal is healthy.' -Recommendation 'No immediate action required. Review historical entries if symptoms were reported during the same time window.' -Evidence ("Path={0}; LatestSignal={1}; {2}" -f $logInfo.Path,$logInfo.LatestSignal,$logInfo.Evidence) -Source 'MPControl.log' -RuleId 'MP-LOG-HISTORY-001'
+                        }
+                        'Healthy' {
+                            Add-MPResult -Category 'Logs' -Check 'MPControl.log Availability' -Target $server -Value $logInfo.Summary -Status 'Healthy' -Severity 'Info' -Impact 'Low' -Finding 'MPControl.log latest detected signal is healthy.' -Recommendation 'No action required.' -Evidence ("Path={0}; LatestSignal={1}; {2}" -f $logInfo.Path,$logInfo.LatestSignal,$logInfo.Evidence) -Source 'MPControl.log' -RuleId 'MP-LOG-HEALTHY-001'
+                        }
+                        default {
+                            Add-MPResult -Category 'Logs' -Check 'MPControl.log Availability' -Target $server -Value $logInfo.Summary -Status 'Info' -Severity 'Info' -Impact 'Low' -Finding 'MPControl.log was read, but no known health signal was detected in the sampled tail.' -Recommendation 'Review MPControl.log manually if Management Point symptoms exist.' -Evidence ("Path={0}; {1}" -f $logInfo.Path,$logInfo.Evidence) -Source 'MPControl.log' -RuleId 'MP-LOG-INFO-001'
+                        }
+                    }
+                    Add-MPResult -Category 'Evidence' -Check 'MPControl Evidence Mode' -Target $server -Value $logInfo.LatestSignal -Status $(if($logInfo.Overall -eq 'Critical'){'Critical'}elseif($logInfo.Overall -eq 'Warning'){'Warning'}else{'Info'}) -Severity $(if($logInfo.Overall -eq 'Critical'){'High'}elseif($logInfo.Overall -eq 'Warning'){'Medium'}else{'Info'}) -Impact $(if($logInfo.Overall -eq 'Critical'){'High'}elseif($logInfo.Overall -eq 'Warning'){'Medium'}else{'Low'}) -Finding 'Evidence Mode captured MPControl.log signals used to support the Management Point status.' -Recommendation 'Use this evidence when explaining why the MP badge is Healthy, Warning or Critical.' -Evidence ("Path={0}; {1}" -f $logInfo.Path,$logInfo.Evidence) -Source 'MPControl.log' -RuleId 'MP-EVIDENCE-001'
+                }
+            } catch {
+                Add-MPResult -Category 'Logs' -Check 'MPControl.log Availability' -Target $server -Value 'UnableToCheck' -Status 'UnableToCheck' -Severity 'Medium' -Impact 'Medium' -Finding 'Unable to read MPControl.log remotely.' -Recommendation 'Validate admin share/remote PowerShell permissions and log path.' -Evidence $_.Exception.Message -Source 'MPControl.log' -RuleId 'MP-LOG-001'
+            }
+
+        } else {
                     Add-MPResult -Category 'Logs' -Check 'MPControl.log' -Target $server -Value 'No recent error indicators' -Status 'Healthy' -Severity 'Info' -Impact 'Low' -Finding 'No recent error indicators found in MPControl.log tail.' -Recommendation 'No action required.' -Evidence ("Path={0}; GoodLines={1}" -f $logInfo.Path,$logInfo.GoodCount) -Source 'MPControl.log' -RuleId 'MP-LOG-001'
                 }
             } catch {
