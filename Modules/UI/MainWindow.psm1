@@ -7,7 +7,9 @@ function Show-CATMainWindow {
     [xml]$xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="ConfigMgr Assessment Tool by J. Maia" Height="780" Width="1280" MinHeight="720" MinWidth="1160" WindowStartupLocation="CenterScreen" Background="#F3F3F3" FontFamily="Segoe UI" FontSize="12">
+        Title="ConfigMgr Assessment Tool by J. Maia" Height="780" Width="1280" MinHeight="720" MinWidth="1160"
+        WindowStartupLocation="CenterScreen" Background="#F3F3F3" FontFamily="Segoe UI" FontSize="12"
+        WindowStyle="SingleBorderWindow" ResizeMode="CanResize" ShowInTaskbar="True">
     <Grid Margin="12">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
@@ -24,7 +26,7 @@ function Show-CATMainWindow {
                 </Grid.ColumnDefinitions>
                 <StackPanel Grid.Column="0">
                     <TextBlock Text="ConfigMgr Assessment Tool by J. Maia" FontSize="24" FontWeight="SemiBold" Foreground="#222"/>
-                    <TextBlock Name="txtVersion" Text="Version 2.0.1-alpha | Build 0014 | MP Connectivity, Services and IIS Prerequisites" Margin="0,4,0,0" Foreground="#555"/>
+                    <TextBlock Name="txtVersion" Text="Version 2.0.5-alpha | Build 0018 | Workflow and UX Refactoring" Margin="0,4,0,0" Foreground="#555"/>
                     <TextBlock Name="txtAssessmentID" Text="Assessment ID:" Margin="0,8,0,0" Foreground="#555"/>
                 </StackPanel>
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top">
@@ -42,13 +44,10 @@ function Show-CATMainWindow {
                     <ColumnDefinition Width="110"/>
                     <ColumnDefinition Width="250"/>
                     <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="115"/>
-                    <ColumnDefinition Width="115"/>
                     <ColumnDefinition Width="120"/>
-                    <ColumnDefinition Width="95"/>
-                    <ColumnDefinition Width="115"/>
                     <ColumnDefinition Width="120"/>
-                    <ColumnDefinition Width="70"/>
+                    <ColumnDefinition Width="120"/>
+                    <ColumnDefinition Width="130"/>
                 </Grid.ColumnDefinitions>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
@@ -59,14 +58,11 @@ function Show-CATMainWindow {
                 <TextBlock Grid.Column="2" Text="SMS Provider" VerticalAlignment="Center" FontWeight="SemiBold" Margin="0,0,8,0"/>
                 <TextBox Grid.Column="3" Name="txtProvider" Height="28" Padding="7,3,7,3" VerticalContentAlignment="Center" HorizontalContentAlignment="Left" Margin="0,0,16,0"/>
                 <TextBlock Grid.Column="4" Name="txtCurrentTask" Text="Current task: Ready" VerticalAlignment="Center" Foreground="#555" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" ToolTip="Current task: Ready"/>
-                <Button Grid.Column="5" Name="btnDiscovery" Content="Run Discovery" Height="30" Margin="8,0,8,0"/>
-                <Button Grid.Column="6" Name="btnCoreHealth" Content="Run Core Health" Height="30" Margin="0,0,8,0" IsEnabled="False"/>
-                <Button Grid.Column="7" Name="btnMP" Content="Run MP" Height="30" Margin="0,0,8,0" IsEnabled="False"/>
-                <Button Grid.Column="8" Name="btnExport" Content="Export CSV" Height="30" Margin="0,0,8,0" IsEnabled="False"/>
-                <Button Grid.Column="9" Name="btnHtml" Content="HTML Report" Height="30" Margin="0,0,8,0" IsEnabled="False"/>
-                <Button Grid.Column="10" Name="btnOpenOutput" Content="Open Output" Height="30" Margin="0,0,8,0" IsEnabled="False"/>
-                <Button Grid.Column="11" Name="btnExit" Content="Exit" Height="30"/>
-                <TextBlock Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="12" Name="txtCompletion" Text="Ready to run discovery." Margin="0,10,0,0" Foreground="#555" FontWeight="SemiBold" TextWrapping="Wrap"/>
+                <Button Grid.Column="5" Name="btnDiscovery" Content="Discovery" Height="30" Margin="8,0,8,0" ToolTip="Run Discovery, Core Health and Management Point assessment in sequence."/>
+                <Button Grid.Column="6" Name="btnExport" Content="Export CSV" Height="30" Margin="0,0,8,0" IsEnabled="False"/>
+                <Button Grid.Column="7" Name="btnHtml" Content="HTML Report" Height="30" Margin="0,0,8,0" IsEnabled="False"/>
+                <Button Grid.Column="8" Name="btnOpenOutput" Content="Open Output" Height="30" Margin="0,0,0,0" IsEnabled="False"/>
+                <TextBlock Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="9" Name="txtCompletion" Text="Ready to run assessment." Margin="0,10,0,0" Foreground="#555" FontWeight="SemiBold" TextWrapping="Wrap"/>
             </Grid>
         </Border>
 
@@ -155,7 +151,7 @@ function Show-CATMainWindow {
     $reader = New-Object System.Xml.XmlNodeReader $xaml
     $window = [Windows.Markup.XamlReader]::Load($reader)
 
-    $names = 'txtVersion','txtAssessmentID','txtHeaderStatus','txtSiteCode','txtProvider','txtCurrentTask','txtCompletion','btnDiscovery','btnCoreHealth','btnMP','btnExport','btnHtml','btnOpenOutput','btnExit','sumServers','sumRoles','sumMP','sumDP','sumSUP','sumRP','treeTopology','progressBar','txtElapsed','gridResults','txtLog','txtDebug','statusLeft','statusLog','statusCsv'
+    $names = 'txtVersion','txtAssessmentID','txtHeaderStatus','txtSiteCode','txtProvider','txtCurrentTask','txtCompletion','btnDiscovery','btnExport','btnHtml','btnOpenOutput','sumServers','sumRoles','sumMP','sumDP','sumSUP','sumRP','treeTopology','progressBar','txtElapsed','gridResults','txtLog','txtDebug','statusLeft','statusLog','statusCsv'
     $ui = @{}
     foreach($n in $names){ $ui[$n] = $window.FindName($n) }
 
@@ -169,7 +165,6 @@ function Show-CATMainWindow {
             $ui.txtElapsed.Text = 'Elapsed: ' + $script:CATDiscoveryStopwatch.Elapsed.ToString('hh\:mm\:ss')
         }
     })
-    # Timer starts only while Discovery is running. It is intentionally stopped when the run finishes.
 
     function Add-UiLog([string]$Message,[string]$Level='INFO') {
         $line = '{0} [{1}] {2}' -f (Get-Date -Format 'HH:mm:ss'), $Level, $Message
@@ -177,6 +172,7 @@ function Show-CATMainWindow {
         $ui.txtLog.ScrollToEnd()
         $ui.statusLeft.Text = $Message
     }
+
     function Set-CurrentTaskText([string]$Message) {
         $text = "Current task: $Message"
         $ui.txtCurrentTask.Text = $text
@@ -185,6 +181,9 @@ function Show-CATMainWindow {
     }
 
     function Get-CATOutputFolderForUi {
+        if ($Session.LastHtmlPath -and (Test-Path -LiteralPath $Session.LastHtmlPath)) {
+            return (Split-Path -Parent $Session.LastHtmlPath)
+        }
         if ($Session.LastCsvPath -and (Test-Path -LiteralPath $Session.LastCsvPath)) {
             return (Split-Path -Parent $Session.LastCsvPath)
         }
@@ -195,11 +194,39 @@ function Show-CATMainWindow {
         return $defaultOutput
     }
 
+    function Reset-CATUiRunState {
+        $Session.StartTime = Get-Date
+        $Session.Results.Clear()
+        $Session.Inventory.Site = $null
+        $Session.Inventory.Servers = @()
+        $Session.Inventory.Roles = @()
+        $Session.Inventory.Counts = [ordered]@{}
+        $Session.Inventory.SQL = $null
+        $Session.Inventory.Boundaries = @()
+        $Session.Inventory.BoundaryGroups = @()
+        $Session.Inventory.CoreHealth = $null
+        $Session.Inventory.HealthScore = $null
+        $Session.LastCsvPath = $null
+        $Session.LastHtmlPath = $null
+        $ui.gridResults.ItemsSource = $null
+        $ui.treeTopology.Items.Clear()
+        $ui.sumServers.Text = '0'
+        $ui.sumRoles.Text = '0'
+        $ui.sumMP.Text = '0'
+        $ui.sumDP.Text = '0'
+        $ui.sumSUP.Text = '0'
+        $ui.sumRP.Text = '0'
+        $ui.statusCsv.Text = 'CSV: not exported'
+        $ui.txtCompletion.Text = 'Assessment is running. Please wait...'
+        $ui.txtCompletion.Foreground = '#555'
+        $ui.txtDebug.Text = ''
+    }
 
     function Refresh-Results {
         $ui.gridResults.ItemsSource = $null
         $ui.gridResults.ItemsSource = @($Session.Results)
         $ui.btnExport.IsEnabled = ($Session.Results.Count -gt 0)
+        $ui.btnHtml.IsEnabled = ($Session.Results.Count -gt 0)
     }
 
     function Update-Summary {
@@ -233,202 +260,95 @@ function Show-CATMainWindow {
         [void]$ui.treeTopology.Items.Add($root)
     }
 
+    function Set-CATButtonsRunning([bool]$IsRunning) {
+        $ui.btnDiscovery.IsEnabled = (-not $IsRunning)
+        $ui.btnExport.IsEnabled = ((-not $IsRunning) -and $Session.Results.Count -gt 0)
+        $ui.btnHtml.IsEnabled = ((-not $IsRunning) -and $Session.Results.Count -gt 0)
+        $ui.btnOpenOutput.IsEnabled = ((-not $IsRunning) -and (($Session.LastCsvPath -and (Test-Path -LiteralPath $Session.LastCsvPath)) -or ($Session.LastHtmlPath -and (Test-Path -LiteralPath $Session.LastHtmlPath))))
+    }
+
     $ui.btnDiscovery.Add_Click({
         try {
-            $Session.StartTime = Get-Date
+            Reset-CATUiRunState
+            $ui.btnDiscovery.Content = 'Running...'
+            Set-CATButtonsRunning $true
             $ui.txtElapsed.Text = 'Elapsed: 00:00:00'
             $timer.Stop()
             $script:CATDiscoveryStopwatch.Reset()
             $script:CATDiscoveryStopwatch.Start()
             $timer.Start()
-            $ui.btnDiscovery.IsEnabled = $false
-            $ui.btnCoreHealth.IsEnabled = $false
-            $ui.btnMP.IsEnabled = $false
-            $ui.btnExport.IsEnabled = $false
-            $ui.btnOpenOutput.IsEnabled = $false
-            $ui.btnHtml.IsEnabled = $false
-            $ui.txtCompletion.Text = 'Discovery is running. Please wait...'
-            $ui.txtCompletion.Foreground = '#555'
             $ui.txtHeaderStatus.Text = 'Running'
             $ui.txtHeaderStatus.Foreground = 'DarkOrange'
             $ui.progressBar.Value = 0
-            Add-UiLog 'Discovery started.'
+            Add-UiLog 'Assessment workflow started.'
             $progressCb = { param($p,$task) $ui.progressBar.Value = $p; Set-CurrentTaskText $task }
             $logCb = { param($msg,$level) Add-UiLog $msg $level }
+
+            Add-UiLog 'Step 1/3 - Discovery started.'
             Invoke-CATDiscovery -Session $Session -SiteCode $ui.txtSiteCode.Text -ProviderServer $ui.txtProvider.Text -ProgressCallback $progressCb -LogCallback $logCb | Out-Null
-            Refresh-Results
             Update-Summary
             Update-Topology
+            Refresh-Results
+
+            Add-UiLog 'Step 2/3 - Core Health started.'
+            $ui.progressBar.Value = 0
+            $coreSummary = Invoke-CATCoreHealth -Session $Session -ProgressCallback $progressCb -LogCallback $logCb
+            Refresh-Results
+
+            $mpSummary = $null
+            $mpCount = @($Session.Inventory.Roles | Where-Object RoleName -like '*Management Point*').Count
+            if ($mpCount -gt 0) {
+                Add-UiLog 'Step 3/3 - Management Point assessment started.'
+                $ui.progressBar.Value = 0
+                $mpSummary = Invoke-CATManagementPointAssessment -Session $Session -ProgressCallback $progressCb -LogCallback $logCb
+                Refresh-Results
+            } else {
+                Add-UiLog 'Step 3/3 - Management Point assessment skipped. No MP role found.' 'INFO'
+            }
+
             $csv = Export-CATCsv -Session $Session
+            $Session.LastCsvPath = $csv
             $ui.statusCsv.Text = "CSV: $csv"
             Add-UiLog "CSV exported: $csv"
-            $serverCount = @($Session.Inventory.Servers).Count
-            $roleCount = @($Session.Inventory.Roles).Count
             $script:CATDiscoveryStopwatch.Stop()
             $timer.Stop()
             $elapsedText = $script:CATDiscoveryStopwatch.Elapsed.ToString('hh\:mm\:ss')
             $ui.txtElapsed.Text = 'Elapsed: ' + $elapsedText
-            $summary = 'Discovery completed successfully | Servers: {0} | Roles: {1} | CSV exported | Elapsed: {2}' -f $serverCount, $roleCount, $elapsedText
+            $serverCount = @($Session.Inventory.Servers).Count
+            $roleCount = @($Session.Inventory.Roles).Count
+            $mpText = if ($mpSummary) { ' | MPs: {0} | MP Warning: {1} | MP Critical: {2}' -f $mpSummary.ManagementPoints,$mpSummary.Warning,$mpSummary.Critical } else { ' | MPs: 0' }
+            $summary = 'Assessment completed | Servers: {0} | Roles: {1}{2} | CSV exported | Elapsed: {3}' -f $serverCount,$roleCount,$mpText,$elapsedText
             $ui.txtHeaderStatus.Text = 'Completed'
             $ui.txtHeaderStatus.Foreground = 'Green'
-            Set-CurrentTaskText 'Discovery completed successfully - Ready for next action'
+            Set-CurrentTaskText 'Assessment completed - Ready for next action'
             $ui.txtCompletion.Text = $summary
             $ui.txtCompletion.Foreground = 'Green'
             $ui.progressBar.Value = 100
             $ui.btnOpenOutput.IsEnabled = $true
             $ui.btnHtml.IsEnabled = $true
-            $ui.btnCoreHealth.IsEnabled = $true
-            $ui.btnMP.IsEnabled = (@($Session.Inventory.Roles | Where-Object RoleName -like '*Management Point*').Count -gt 0)
-            $ui.txtDebug.Text = "AssessmentID: $($Session.AssessmentID)`r`nLogFile: $($Session.LogFile)`r`nCSV: $csv`r`nServers: $serverCount`r`nRoles: $roleCount`r`nElapsed: $elapsedText"
-            [System.Windows.MessageBox]::Show($summary + "`n`nCSV:`n$csv", 'Discovery completed', 'OK', 'Information') | Out-Null
+            $ui.txtDebug.Text = "AssessmentID: $($Session.AssessmentID)`r`nLogFile: $($Session.LogFile)`r`nCSV: $csv`r`nServers: $serverCount`r`nRoles: $roleCount`r`nCoreHealth Servers: $($coreSummary.Servers)`r`nElapsed: $elapsedText"
+            [System.Windows.MessageBox]::Show($summary + "`n`nCSV:`n$csv", 'Assessment completed', 'OK', 'Information') | Out-Null
         } catch {
             if ($script:CATDiscoveryStopwatch -and $script:CATDiscoveryStopwatch.IsRunning) { $script:CATDiscoveryStopwatch.Stop() }
             $timer.Stop()
             Add-UiLog $_.Exception.Message 'ERROR'
-            [System.Windows.MessageBox]::Show($_.Exception.Message, 'Discovery failed', 'OK', 'Error') | Out-Null
+            [System.Windows.MessageBox]::Show($_.Exception.Message, 'Assessment failed', 'OK', 'Error') | Out-Null
             Refresh-Results
             $ui.txtHeaderStatus.Text = 'Failed'
             $ui.txtHeaderStatus.Foreground = 'Red'
             $ui.txtCurrentTask.Text = 'Current task: Failed'
+            $ui.txtCompletion.Text = 'Assessment failed. Review the Execution Log tab.'
+            $ui.txtCompletion.Foreground = 'Red'
         } finally {
-            $ui.btnDiscovery.IsEnabled = $true
-        }
-    })
-
-
-
-    $ui.btnCoreHealth.Add_Click({
-        try {
-            if (-not $Session.Inventory.Servers -or @($Session.Inventory.Servers).Count -eq 0) {
-                [System.Windows.MessageBox]::Show('Run Discovery successfully before running Core Health.', 'Core Health', 'OK', 'Warning') | Out-Null
-                return
-            }
-            $ui.txtElapsed.Text = 'Elapsed: 00:00:00'
-            $timer.Stop()
-            $script:CATDiscoveryStopwatch.Reset()
-            $script:CATDiscoveryStopwatch.Start()
-            $timer.Start()
-            $ui.btnDiscovery.IsEnabled = $false
-            $ui.btnCoreHealth.IsEnabled = $false
-            $ui.btnMP.IsEnabled = $false
-            $ui.btnExport.IsEnabled = $false
-            $ui.btnOpenOutput.IsEnabled = $false
-            $ui.btnHtml.IsEnabled = $false
-            $ui.txtCompletion.Text = 'Core Health is running. Please wait...'
-            $ui.txtCompletion.Foreground = '#555'
-            $ui.txtHeaderStatus.Text = 'Running Core Health'
-            $ui.txtHeaderStatus.Foreground = 'DarkOrange'
-            $ui.progressBar.Value = 0
-            Add-UiLog 'Core Health started.'
-            $progressCb = { param($p,$task) $ui.progressBar.Value = $p; Set-CurrentTaskText $task }
-            $logCb = { param($msg,$level) Add-UiLog $msg $level }
-            $summaryObj = Invoke-CATCoreHealth -Session $Session -ProgressCallback $progressCb -LogCallback $logCb
-            Refresh-Results
-            $csv = Export-CATCsv -Session $Session
-            $ui.statusCsv.Text = "CSV: $csv"
-            Add-UiLog "CSV exported: $csv"
-            $script:CATDiscoveryStopwatch.Stop()
-            $timer.Stop()
-            $elapsedText = $script:CATDiscoveryStopwatch.Elapsed.ToString('hh\:mm\:ss')
-            $ui.txtElapsed.Text = 'Elapsed: ' + $elapsedText
-            $summary = 'Core Health completed successfully | Servers: {0} | Healthy: {1} | Warning: {2} | Critical: {3} | UnableToCheck: {4} | Health Score: {5}% | CSV exported | Elapsed: {6}' -f $summaryObj.Servers,$summaryObj.Healthy,$summaryObj.Warning,$summaryObj.Critical,$summaryObj.UnableToCheck,$summaryObj.HealthScore,$elapsedText
-            $ui.txtHeaderStatus.Text = 'Completed'
-            $ui.txtHeaderStatus.Foreground = 'Green'
-            Set-CurrentTaskText 'Core Health completed successfully - Ready for next action'
-            $ui.txtCompletion.Text = $summary
-            $ui.txtCompletion.Foreground = 'Green'
-            $ui.progressBar.Value = 100
-            $ui.btnOpenOutput.IsEnabled = $true
-            $ui.btnHtml.IsEnabled = $true
-            $ui.txtDebug.Text = "AssessmentID: $($Session.AssessmentID)`r`nLogFile: $($Session.LogFile)`r`nCSV: $csv`r`nCoreHealth Servers: $($summaryObj.Servers)`r`nHealthy: $($summaryObj.Healthy)`r`nWarning: $($summaryObj.Warning)`r`nCritical: $($summaryObj.Critical)`r`nUnableToCheck: $($summaryObj.UnableToCheck)`r`nHealthScore: $($summaryObj.HealthScore)%`r`nElapsed: $elapsedText"
-            [System.Windows.MessageBox]::Show($summary + "`n`nCSV:`n$csv", 'Core Health completed', 'OK', 'Information') | Out-Null
-        } catch {
-            if ($script:CATDiscoveryStopwatch -and $script:CATDiscoveryStopwatch.IsRunning) { $script:CATDiscoveryStopwatch.Stop() }
-            $timer.Stop()
-            Add-UiLog $_.Exception.Message 'ERROR'
-            [System.Windows.MessageBox]::Show($_.Exception.Message, 'Core Health failed', 'OK', 'Error') | Out-Null
-            Refresh-Results
-            $ui.txtHeaderStatus.Text = 'Failed'
-            $ui.txtHeaderStatus.Foreground = 'Red'
-            $ui.txtCurrentTask.Text = 'Current task: Core Health failed'
-        } finally {
-            $ui.btnDiscovery.IsEnabled = $true
-            $ui.btnCoreHealth.IsEnabled = ($Session.Inventory.Servers -and @($Session.Inventory.Servers).Count -gt 0)
-            $ui.btnMP.IsEnabled = (@($Session.Inventory.Roles | Where-Object RoleName -like '*Management Point*').Count -gt 0)
-            $ui.btnExport.IsEnabled = ($Session.Results.Count -gt 0)
-            $ui.btnOpenOutput.IsEnabled = ($Session.LastCsvPath -and (Test-Path -LiteralPath $Session.LastCsvPath))
-            $ui.btnHtml.IsEnabled = ($Session.Results.Count -gt 0)
-        }
-    })
-
-
-    $ui.btnMP.Add_Click({
-        try {
-            if (-not $Session.Inventory.Roles -or @($Session.Inventory.Roles | Where-Object RoleName -like '*Management Point*').Count -eq 0) {
-                [System.Windows.MessageBox]::Show('Run Discovery successfully before running Management Point assessment. No Management Point role was found.', 'Management Point', 'OK', 'Warning') | Out-Null
-                return
-            }
-            $ui.txtElapsed.Text = 'Elapsed: 00:00:00'
-            $timer.Stop()
-            $script:CATDiscoveryStopwatch.Reset()
-            $script:CATDiscoveryStopwatch.Start()
-            $timer.Start()
-            $ui.btnDiscovery.IsEnabled = $false
-            $ui.btnCoreHealth.IsEnabled = $false
-            $ui.btnMP.IsEnabled = $false
-            $ui.btnExport.IsEnabled = $false
-            $ui.btnOpenOutput.IsEnabled = $false
-            $ui.btnHtml.IsEnabled = $false
-            $ui.txtCompletion.Text = 'Management Point assessment is running. Please wait...'
-            $ui.txtCompletion.Foreground = '#555'
-            $ui.txtHeaderStatus.Text = 'Running MP Assessment'
-            $ui.txtHeaderStatus.Foreground = 'DarkOrange'
-            $ui.progressBar.Value = 0
-            Add-UiLog 'Management Point assessment started.'
-            $progressCb = { param($p,$task) $ui.progressBar.Value = $p; Set-CurrentTaskText $task }
-            $logCb = { param($msg,$level) Add-UiLog $msg $level }
-            $summaryObj = Invoke-CATManagementPointAssessment -Session $Session -ProgressCallback $progressCb -LogCallback $logCb
-            Refresh-Results
-            $csv = Export-CATCsv -Session $Session
-            $ui.statusCsv.Text = "CSV: $csv"
-            Add-UiLog "CSV exported: $csv"
-            $script:CATDiscoveryStopwatch.Stop()
-            $timer.Stop()
-            $elapsedText = $script:CATDiscoveryStopwatch.Elapsed.ToString('hh\:mm\:ss')
-            $ui.txtElapsed.Text = 'Elapsed: ' + $elapsedText
-            $summary = 'Management Point assessment completed | MPs: {0} | Healthy: {1} | Warning: {2} | Critical: {3} | UnableToCheck: {4} | CSV exported | Elapsed: {5}' -f $summaryObj.ManagementPoints,$summaryObj.Healthy,$summaryObj.Warning,$summaryObj.Critical,$summaryObj.UnableToCheck,$elapsedText
-            $ui.txtHeaderStatus.Text = 'Completed'
-            $ui.txtHeaderStatus.Foreground = 'Green'
-            Set-CurrentTaskText 'Management Point assessment completed - Ready for next action'
-            $ui.txtCompletion.Text = $summary
-            $ui.txtCompletion.Foreground = 'Green'
-            $ui.progressBar.Value = 100
-            $ui.btnOpenOutput.IsEnabled = $true
-            $ui.btnHtml.IsEnabled = $true
-            $ui.txtDebug.Text = "AssessmentID: $($Session.AssessmentID)`r`nLogFile: $($Session.LogFile)`r`nCSV: $csv`r`nManagementPoints: $($summaryObj.ManagementPoints)`r`nHealthy: $($summaryObj.Healthy)`r`nWarning: $($summaryObj.Warning)`r`nCritical: $($summaryObj.Critical)`r`nUnableToCheck: $($summaryObj.UnableToCheck)`r`nElapsed: $elapsedText"
-            [System.Windows.MessageBox]::Show($summary + "`n`nCSV:`n$csv", 'Management Point assessment completed', 'OK', 'Information') | Out-Null
-        } catch {
-            if ($script:CATDiscoveryStopwatch -and $script:CATDiscoveryStopwatch.IsRunning) { $script:CATDiscoveryStopwatch.Stop() }
-            $timer.Stop()
-            Add-UiLog $_.Exception.Message 'ERROR'
-            [System.Windows.MessageBox]::Show($_.Exception.Message, 'Management Point assessment failed', 'OK', 'Error') | Out-Null
-            Refresh-Results
-            $ui.txtHeaderStatus.Text = 'Failed'
-            $ui.txtHeaderStatus.Foreground = 'Red'
-            $ui.txtCurrentTask.Text = 'Current task: Management Point assessment failed'
-        } finally {
-            $ui.btnDiscovery.IsEnabled = $true
-            $ui.btnCoreHealth.IsEnabled = ($Session.Inventory.Servers -and @($Session.Inventory.Servers).Count -gt 0)
-            $ui.btnMP.IsEnabled = (@($Session.Inventory.Roles | Where-Object RoleName -like '*Management Point*').Count -gt 0)
-            $ui.btnExport.IsEnabled = ($Session.Results.Count -gt 0)
-            $ui.btnOpenOutput.IsEnabled = ($Session.LastCsvPath -and (Test-Path -LiteralPath $Session.LastCsvPath))
-            $ui.btnHtml.IsEnabled = ($Session.Results.Count -gt 0)
+            $ui.btnDiscovery.Content = 'Discovery'
+            Set-CATButtonsRunning $false
         }
     })
 
     $ui.btnExport.Add_Click({
         try {
             $csv = Export-CATCsv -Session $Session
+            $Session.LastCsvPath = $csv
             $ui.statusCsv.Text = "CSV: $csv"
             $ui.btnOpenOutput.IsEnabled = $true
             $ui.btnHtml.IsEnabled = $true
@@ -440,17 +360,12 @@ function Show-CATMainWindow {
     $ui.btnHtml.Add_Click({
         try {
             if (-not $Session.Results -or $Session.Results.Count -eq 0) {
-                [System.Windows.MessageBox]::Show('Run Discovery/Core Health before generating the HTML report.', 'HTML Report', 'OK', 'Warning') | Out-Null
-                return
-            }
-            $mpRoleCount = @($Session.Inventory.Roles | Where-Object { $_.RoleName -like '*Management Point*' }).Count
-            $mpResultCount = @($Session.Results | Where-Object { $_.Module -eq 'ManagementPoint' }).Count
-            if ($mpRoleCount -gt 0 -and $mpResultCount -eq 0) {
-                [System.Windows.MessageBox]::Show('Management Point role(s) were discovered, but the MP assessment results are not present yet. Click Run MP before generating the HTML report, otherwise the Management Point tab will be empty.', 'Run MP first', 'OK', 'Warning') | Out-Null
+                [System.Windows.MessageBox]::Show('Run Discovery before generating the HTML report.', 'HTML Report', 'OK', 'Warning') | Out-Null
                 return
             }
             Add-UiLog 'Generating HTML report.'
             $html = Export-CATHtmlReport -Session $Session
+            $Session.LastHtmlPath = $html
             $ui.btnOpenOutput.IsEnabled = $true
             Add-UiLog "HTML report generated: $html"
             [System.Windows.MessageBox]::Show("HTML report generated:`n$html", 'HTML Report', 'OK', 'Information') | Out-Null
@@ -475,7 +390,6 @@ function Show-CATMainWindow {
         }
     })
 
-    $ui.btnExit.Add_Click({ $timer.Stop(); $window.Close() })
     Add-UiLog 'Application ready.'
     [void]$window.ShowDialog()
 }

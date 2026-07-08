@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.0.5-alpha Build 0018 - Workflow and UX Refactoring
+
+- Restored standard Windows window controls through explicit WindowStyle and ResizeMode.
+- Removed the Exit button from the UI.
+- Consolidated Run Discovery, Run Core Health and Run MP into a single **Discovery** workflow button.
+- Added clean run reset logic so the full assessment can be executed again in the same application session.
+- Reorganized toolbar buttons to avoid Open Output truncation and provide room for future modules.
+- Discovery now orchestrates: Discovery Engine, Core Health Engine, Management Point Engine and CSV export.
+
 ## v2.0.4-alpha Build 0017
 - Hotfix release: restores the stable Management Point engine after rejected Build 0016 parser error.
 - Uses the last validated MP implementation from Build 0015 as the baseline.

@@ -1,6 +1,6 @@
 # ConfigMgr Assessment Tool by J. Maia
 
-Version 2.0.4-alpha | Build 0017
+Version 2.0.5-alpha | Build 0018
 
 Recommended flow:
 
