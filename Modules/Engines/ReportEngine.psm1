@@ -4,6 +4,26 @@ function ConvertTo-CATHtmlEncoded {
     return [System.Net.WebUtility]::HtmlEncode([string]$Value)
 }
 
+
+function Normalize-CATServerName {
+    param([AllowNull()][string]$Name)
+    if([string]::IsNullOrWhiteSpace($Name)){ return '' }
+    $n = ([string]$Name).Trim().TrimEnd('.')
+    if($n.Contains('\\')){ $n = $n.Split('\\')[-1] }
+    return $n.ToUpperInvariant()
+}
+
+function Test-CATServerNameMatch {
+    param([AllowNull()][string]$A,[AllowNull()][string]$B)
+    $a1 = Normalize-CATServerName $A
+    $b1 = Normalize-CATServerName $B
+    if(-not $a1 -or -not $b1){ return $false }
+    if($a1 -eq $b1){ return $true }
+    $aShort = $a1.Split('.')[0]
+    $bShort = $b1.Split('.')[0]
+    return ($aShort -eq $bShort)
+}
+
 function Get-CATStatusRank {
     param([string]$Status)
     switch ($Status) {
@@ -94,10 +114,10 @@ function Export-CATHtmlReport {
 
     $cards = New-Object System.Collections.Generic.List[string]
     foreach($server in $servers){
-        $srvCoreResults = @($core | Where-Object Target -eq $server)
-        $srvMpResults = @($mpAll | Where-Object Target -eq $server)
+        $srvCoreResults = @($core | Where-Object { Test-CATServerNameMatch $_.Target $server })
+        $srvMpResults = @($mpAll | Where-Object { Test-CATServerNameMatch $_.Target $server })
         $srvResults = @($srvCoreResults + $srvMpResults)
-        $roles = @($Session.Inventory.Roles | Where-Object ServerName -eq $server | Select-Object -ExpandProperty RoleName -Unique)
+        $roles = @($Session.Inventory.Roles | Where-Object { Test-CATServerNameMatch $_.ServerName $server } | Select-Object -ExpandProperty RoleName -Unique)
         $status = Get-CATWorstStatus -Items $srvResults
         $statusClass = switch($status){ 'Critical'{'critical'} 'Warning'{'warning'} 'UnableToCheck'{'unable'} 'Healthy'{'healthy'} default{'info'} }
         $mpStatusForBadge = if(@($srvMpResults).Count -gt 0){ Get-CATWorstStatus -Items $srvMpResults } else { '' }
@@ -144,7 +164,7 @@ function Export-CATHtmlReport {
       <button onclick="showTab(this,'os')">Operating System</button>
       <button onclick="showTab(this,'storage')">Storage</button>
       <button onclick="showTab(this,'services')">Services</button>
-      <button onclick="showTab(this,'mp')">Management Point</button>
+      $(if(($roles -join " ") -like "*Management Point*" -or @($srvMpResults).Count -gt 0){'<button onclick="showTab(this,''mp'')">Management Point</button>'})
     </div>
     <div class="tab-panel overview active">
       <div class="mini-grid">
@@ -205,7 +225,7 @@ function Export-CATHtmlReport {
 <body>
 <header>
   <h1>ConfigMgr Assessment Tool by J. Maia</h1>
-  <div class="subtitle">Version 2.0.0-alpha | Build 0013 | Assessment ID: $(ConvertTo-CATHtmlEncoded $Session.AssessmentID) | Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')</div>
+  <div class="subtitle">Version 2.0.1-alpha | Build 0014 | Assessment ID: $(ConvertTo-CATHtmlEncoded $Session.AssessmentID) | Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')</div>
 </header>
 <div class="layout">
   <aside class="side">

@@ -42,7 +42,7 @@ function Invoke-CATManagementPointAssessment {
     }
 
     Send-Log ("Starting Management Point assessment for {0} server(s)." -f $mpServers.Count)
-    Add-MPResult -Category 'Summary' -Check 'Management Point Assessment Started' -Target '' -Value ("{0} MP server(s)" -f $mpServers.Count) -Status 'Info' -Finding 'Management Point assessment started.' -Evidence ($mpServers -join '; ') -Source 'DiscoveryInventory'
+    Add-MPResult -Category 'Summary' -Check 'MP Connectivity, Services and IIS Prerequisites Started' -Target '' -Value ("{0} MP server(s)" -f $mpServers.Count) -Status 'Info' -Finding 'Management Point assessment started.' -Evidence ($mpServers -join '; ') -Source 'DiscoveryInventory'
 
     $index = 0
     foreach($server in $mpServers){
@@ -87,7 +87,7 @@ function Invoke-CATManagementPointAssessment {
 
         if($cimAvailable){
             # Services
-            foreach($svcName in @('SMS_EXECUTIVE','W3SVC','Winmgmt')){
+            foreach($svcName in @('SMS_EXECUTIVE','SMS_SITE_COMPONENT_MANAGER','W3SVC','Winmgmt','RemoteRegistry','BITS')){
                 try {
                     $filter = "Name='$svcName'"
                     $svc = Get-CimInstance -ComputerName $server -ClassName Win32_Service -Filter $filter -ErrorAction Stop
@@ -102,6 +102,48 @@ function Invoke-CATManagementPointAssessment {
                 } catch {
                     Add-MPResult -Category 'Services' -Check ("Service {0}" -f $svcName) -Target $server -Value 'UnableToCheck' -Status 'UnableToCheck' -Severity 'Medium' -Impact 'Medium' -Finding 'Unable to query required service.' -Recommendation 'Validate CIM permissions and remote service query access.' -Evidence $_.Exception.Message -Source 'Win32_Service' -RuleId 'MP-SVC-001'
                 }
+            }
+
+
+            # IIS prerequisites based on Microsoft ConfigMgr MP prerequisites
+            try {
+                $iisPrereq = Invoke-Command -ComputerName $server -ScriptBlock {
+                    $featureNames = @('Web-Server','Web-Windows-Auth','Web-ISAPI-Ext','Web-Metabase','Web-WMI')
+                    $features = @()
+                    if(Get-Command Get-WindowsFeature -ErrorAction SilentlyContinue){
+                        $features = @(Get-WindowsFeature -Name $featureNames -ErrorAction SilentlyContinue | ForEach-Object { [pscustomobject]@{ Name=$_.Name; Installed=[bool]$_.Installed; DisplayName=$_.DisplayName } })
+                    }
+                    Import-Module WebAdministration -ErrorAction SilentlyContinue
+                    $verbs = @('GET','POST','CCM_POST','HEAD','PROPFIND')
+                    $allowed = @()
+                    foreach($verb in $verbs){
+                        $found = $null
+                        try { $found = Get-WebConfigurationProperty -Filter "system.webServer/security/requestFiltering/verbs/add[@verb='$verb']" -Name allowed -PSPath 'MACHINE/WEBROOT/APPHOST' -ErrorAction SilentlyContinue } catch {}
+                        $allowed += [pscustomobject]@{ Verb=$verb; Allowed= if($null -eq $found){ $true } else { [bool]$found.Value } }
+                    }
+                    [pscustomobject]@{ Features=$features; Verbs=$allowed }
+                } -ErrorAction Stop
+
+                $requiredFeatures = @('Web-Server','Web-Windows-Auth','Web-ISAPI-Ext','Web-Metabase','Web-WMI')
+                foreach($feature in $requiredFeatures){
+                    $f = @($iisPrereq.Features | Where-Object Name -eq $feature | Select-Object -First 1)
+                    if($f -and $f.Installed){
+                        Add-MPResult -Category 'IIS Prerequisites' -Check ("Feature {0}" -f $feature) -Target $server -Value 'Installed' -Status 'Healthy' -Severity 'Info' -Impact 'Low' -Finding 'Required IIS feature is installed.' -Recommendation 'No action required.' -Evidence ("Name={0}; Installed=True" -f $feature) -Source 'Get-WindowsFeature' -RuleId 'MP-IIS-PREREQ-001'
+                    } elseif($f) {
+                        Add-MPResult -Category 'IIS Prerequisites' -Check ("Feature {0}" -f $feature) -Target $server -Value 'NotInstalled' -Status 'Critical' -Severity 'High' -Impact 'High' -Finding 'Required IIS feature for Management Point is not installed.' -Recommendation 'Install the missing IIS prerequisite and review MPSetup.log/mpMSI.log if the Management Point installation is unhealthy.' -Evidence ("Name={0}; Installed=False" -f $feature) -Source 'Get-WindowsFeature' -RuleId 'MP-IIS-PREREQ-001'
+                    } else {
+                        Add-MPResult -Category 'IIS Prerequisites' -Check ("Feature {0}" -f $feature) -Target $server -Value 'UnableToCheck' -Status 'UnableToCheck' -Severity 'Medium' -Impact 'Medium' -Finding 'Unable to determine IIS feature installation state.' -Recommendation 'Validate remote PowerShell permissions and Windows Server feature query availability.' -Evidence ("Name={0}; Get-WindowsFeature did not return data." -f $feature) -Source 'Get-WindowsFeature' -RuleId 'MP-IIS-PREREQ-001'
+                    }
+                }
+                foreach($verb in @($iisPrereq.Verbs)){
+                    if($verb.Allowed){
+                        Add-MPResult -Category 'IIS Prerequisites' -Check ("HTTP Verb {0}" -f $verb.Verb) -Target $server -Value 'Allowed' -Status 'Healthy' -Severity 'Info' -Impact 'Low' -Finding 'Required HTTP verb is allowed or not explicitly denied.' -Recommendation 'No action required.' -Evidence ("Verb={0}; Allowed=True" -f $verb.Verb) -Source 'IIS RequestFiltering' -RuleId 'MP-IIS-VERB-001'
+                    } else {
+                        Add-MPResult -Category 'IIS Prerequisites' -Check ("HTTP Verb {0}" -f $verb.Verb) -Target $server -Value 'Denied' -Status 'Critical' -Severity 'High' -Impact 'High' -Finding 'Required HTTP verb appears to be denied in IIS request filtering.' -Recommendation 'Allow required ConfigMgr client communication verbs: GET, POST, CCM_POST, HEAD and PROPFIND.' -Evidence ("Verb={0}; Allowed=False" -f $verb.Verb) -Source 'IIS RequestFiltering' -RuleId 'MP-IIS-VERB-001'
+                    }
+                }
+            } catch {
+                Add-MPResult -Category 'IIS Prerequisites' -Check 'IIS Prerequisite Query' -Target $server -Value 'UnableToCheck' -Status 'UnableToCheck' -Severity 'Medium' -Impact 'Medium' -Finding 'Unable to query IIS prerequisite configuration remotely.' -Recommendation 'Validate remote PowerShell permissions, IIS management tooling and WebAdministration module availability.' -Evidence $_.Exception.Message -Source 'Invoke-Command/WebAdministration' -RuleId 'MP-IIS-PREREQ-000'
             }
 
             # IIS App Pools and bindings

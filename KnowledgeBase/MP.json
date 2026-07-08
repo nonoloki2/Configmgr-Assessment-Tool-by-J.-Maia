@@ -1,26 +1,38 @@
 [
   {
+    "RuleId": "MP-CONN-001",
+    "Check": "DNS Resolve",
+    "Severity": "Warning",
+    "Recommendation": "Validate DNS registration and the Management Point FQDN discovered by ConfigMgr."
+  },
+  {
+    "RuleId": "MP-CONN-002",
+    "Check": "Ping",
+    "Severity": "Warning",
+    "Recommendation": "Validate network path. ICMP may be blocked, so confirm with WinRM and HTTP tests."
+  },
+  {
+    "RuleId": "MP-CONN-003",
+    "Check": "WinRM",
+    "Severity": "Medium",
+    "Recommendation": "Enable/validate WinRM or run the assessment from a context allowed to connect remotely."
+  },
+  {
+    "RuleId": "MP-IIS-PREREQ-001",
+    "Check": "IIS Features",
+    "Severity": "High",
+    "Recommendation": "Install required IIS prerequisites for Management Point: Web-Server, Windows Authentication, ISAPI Extensions, IIS 6 Metabase Compatibility and IIS 6 WMI Compatibility."
+  },
+  {
+    "RuleId": "MP-IIS-VERB-001",
+    "Check": "HTTP Verbs",
+    "Severity": "High",
+    "Recommendation": "Allow required ConfigMgr client communication verbs: GET, POST, CCM_POST, HEAD and PROPFIND."
+  },
+  {
     "RuleId": "MP-SVC-001",
-    "Category": "Services",
-    "Description": "Required MP-related services must be running.",
-    "Recommendation": "Start stopped required services and review Windows Event Logs, MPControl.log and IIS status."
-  },
-  {
-    "RuleId": "MP-IIS-001",
-    "Category": "IIS",
-    "Description": "MP IIS application pools should be present and started.",
-    "Recommendation": "Validate IIS, Management Point installation, app pools and related IIS event logs."
-  },
-  {
-    "RuleId": "MP-LOG-001",
-    "Category": "Logs",
-    "Description": "MPControl.log should not contain recent error indicators.",
-    "Recommendation": "Review MPControl.log and correlate errors with IIS, certificates, bindings and client communication mode."
-  },
-  {
-    "RuleId": "MP-URL-001",
-    "Category": "Live Test",
-    "Description": "The MPList endpoint should respond according to client communication mode.",
-    "Recommendation": "Validate HTTP/HTTPS bindings, firewall, DNS and certificate trust."
+    "Check": "Services",
+    "Severity": "High",
+    "Recommendation": "Required services should be running. Review Windows Event Logs, sitecomp.log and MP-related logs when stopped."
   }
 ]

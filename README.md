@@ -1,18 +1,24 @@
 # ConfigMgr Assessment Tool by J. Maia
 
-Version 2.0.0-alpha | Build 0013
+Version 2.0.1-alpha | Build 0014
 
-## Flow
+## Current focus
+
+Management Point Assessment - Connectivity, Services and IIS Prerequisites.
+
+## Test flow
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File .\ConfigMgrAssessmentTool.ps1
+```
+
+Then run:
 
 1. Run Discovery
 2. Run Core Health
 3. Run MP
-4. Generate HTML Report
+4. HTML Report
 
-## Build 0013
+## Build 0014
 
-This build introduces the first ConfigMgr role-specific assessment module: Management Point Assessment.
-
-The MP module collects evidence from connectivity checks, Windows services, IIS configuration, certificate store, MPControl.log and MPList URL live tests.
-
-All findings are exported to CSV and included in the HTML report under the Management Point tab for each MP server.
+This build adds the first evidence-based Management Point assessment layer and fixes HTML server matching between FQDN and short names.

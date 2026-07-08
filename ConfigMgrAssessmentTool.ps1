@@ -1,7 +1,7 @@
 <#
  ConfigMgr Assessment Tool by J. Maia
- Version 2.0.0-alpha | Build 0013
- Phase: Management Point Assessment
+ Version 2.0.1-alpha | Build 0014
+ Phase: MP Connectivity, Services and IIS Prerequisites
 #>
 [CmdletBinding()]
 param()
