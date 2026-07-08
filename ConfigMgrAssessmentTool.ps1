@@ -1,7 +1,7 @@
 <#
  ConfigMgr Assessment Tool by J. Maia
- Version 1.4.1-alpha | Build 0012
- Phase: HTML Encoding Fix
+ Version 2.0.0-alpha | Build 0013
+ Phase: Management Point Assessment
 #>
 [CmdletBinding()]
 param()
@@ -23,6 +23,7 @@ Import-Module (Join-Path $script:AppRoot 'Modules\Core\Logging.psm1') -Force
 Import-Module (Join-Path $script:AppRoot 'Modules\Core\Export.psm1') -Force
 Import-Module (Join-Path $script:AppRoot 'Modules\Engines\DiscoveryEngine.psm1') -Force
 Import-Module (Join-Path $script:AppRoot 'Modules\Engines\CoreHealthEngine.psm1') -Force
+Import-Module (Join-Path $script:AppRoot 'Modules\Engines\ManagementPointEngine.psm1') -Force
 Import-Module (Join-Path $script:AppRoot 'Modules\Engines\RuleEngine.psm1') -Force
 Import-Module (Join-Path $script:AppRoot 'Modules\Engines\ReportEngine.psm1') -Force
 Import-Module (Join-Path $script:AppRoot 'Modules\UI\MainWindow.psm1') -Force

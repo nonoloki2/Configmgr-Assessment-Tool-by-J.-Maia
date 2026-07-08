@@ -1,37 +1,18 @@
 # ConfigMgr Assessment Tool by J. Maia
 
-Version **1.4.1-alpha** | Build **0011** | Release **HTML Encoding Fix**
+Version 2.0.0-alpha | Build 0013
 
-## What is included
+## Flow
 
-- Discovery Engine validated against the SMS Provider.
-- Core Health Assessment with DNS, Ping, WinRM, OS, Uptime, Storage, Memory, CPU and Services.
-- Patch Evidence facts:
-  - Last Installed KB
-  - Installed On
-  - Days Since Last Patch
-  - Pending Reboot
-  - Pending Reboot Reason when detected
-- CSV export for Excel/table analysis.
-- HTML Report export for operational review.
-- Server cards with collapsible sections.
-- Role badges, status color, filters and search.
+1. Run Discovery
+2. Run Core Health
+3. Run MP
+4. Generate HTML Report
 
-## Run
+## Build 0013
 
-```powershell
-powershell.exe -ExecutionPolicy Bypass -File .\ConfigMgrAssessmentTool.ps1
-```
+This build introduces the first ConfigMgr role-specific assessment module: Management Point Assessment.
 
-Recommended flow:
+The MP module collects evidence from connectivity checks, Windows services, IIS configuration, certificate store, MPControl.log and MPList URL live tests.
 
-1. Enter Site Code.
-2. Enter SMS Provider.
-3. Click **Run Discovery**.
-4. Click **Run Core Health**.
-5. Click **HTML Report**.
-6. Click **Open Output** if you want to browse the output folder.
-
-## Project principle
-
-The tool follows the **Facts → Rules → Evidence** model. It does not claim patch compliance scores or unsupported percentages. It reports evidence and applies objective rules only when the data supports them.
+All findings are exported to CSV and included in the HTML report under the Management Point tab for each MP server.

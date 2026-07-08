@@ -1,1 +1,26 @@
-{"module":"MP","rules":[]}
+[
+  {
+    "RuleId": "MP-SVC-001",
+    "Category": "Services",
+    "Description": "Required MP-related services must be running.",
+    "Recommendation": "Start stopped required services and review Windows Event Logs, MPControl.log and IIS status."
+  },
+  {
+    "RuleId": "MP-IIS-001",
+    "Category": "IIS",
+    "Description": "MP IIS application pools should be present and started.",
+    "Recommendation": "Validate IIS, Management Point installation, app pools and related IIS event logs."
+  },
+  {
+    "RuleId": "MP-LOG-001",
+    "Category": "Logs",
+    "Description": "MPControl.log should not contain recent error indicators.",
+    "Recommendation": "Review MPControl.log and correlate errors with IIS, certificates, bindings and client communication mode."
+  },
+  {
+    "RuleId": "MP-URL-001",
+    "Category": "Live Test",
+    "Description": "The MPList endpoint should respond according to client communication mode.",
+    "Recommendation": "Validate HTTP/HTTPS bindings, firewall, DNS and certificate trust."
+  }
+]

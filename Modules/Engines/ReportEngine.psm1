@@ -80,6 +80,7 @@ function Export-CATHtmlReport {
     $path = Join-Path $reportRoot ("CAT_Report_{0}_{1}.html" -f $stamp,$shortId)
     $all = @($Session.Results)
     $core = @($all | Where-Object { $_.Module -eq 'CoreHealth' -and $_.Target })
+    $mpAll = @($all | Where-Object { $_.Module -eq 'ManagementPoint' -and $_.Target })
     $servers = @($Session.Inventory.Servers | Sort-Object -Unique)
     if(-not $servers -or $servers.Count -eq 0){ $servers = @($core | Select-Object -ExpandProperty Target -Unique | Sort-Object) }
 
@@ -93,18 +94,33 @@ function Export-CATHtmlReport {
 
     $cards = New-Object System.Collections.Generic.List[string]
     foreach($server in $servers){
-        $srvResults = @($core | Where-Object Target -eq $server)
+        $srvCoreResults = @($core | Where-Object Target -eq $server)
+        $srvMpResults = @($mpAll | Where-Object Target -eq $server)
+        $srvResults = @($srvCoreResults + $srvMpResults)
         $roles = @($Session.Inventory.Roles | Where-Object ServerName -eq $server | Select-Object -ExpandProperty RoleName -Unique)
         $status = Get-CATWorstStatus -Items $srvResults
         $statusClass = switch($status){ 'Critical'{'critical'} 'Warning'{'warning'} 'UnableToCheck'{'unable'} 'Healthy'{'healthy'} default{'info'} }
-        $roleBadges = if($roles){ ($roles | ForEach-Object { '<span class="badge">' + (ConvertTo-CATHtmlEncoded $_) + '</span>' }) -join ' ' } else { '<span class="badge muted">No role data</span>' }
+        $mpStatusForBadge = if(@($srvMpResults).Count -gt 0){ Get-CATWorstStatus -Items $srvMpResults } else { '' }
+        $roleBadges = if($roles){ ($roles | ForEach-Object {
+            $roleText = [string]$_
+            $badgeClass = 'badge'
+            if($roleText -like '*Management Point*' -and $mpStatusForBadge){ $badgeClass = 'badge ' + ($mpStatusForBadge.ToLowerInvariant()) }
+            '<span class="' + $badgeClass + '">' + (ConvertTo-CATHtmlEncoded $roleText) + '</span>'
+        }) -join ' ' } else { '<span class="badge muted">No role data</span>' }
         $osRows = Convert-CATResultToRows @($srvResults | Where-Object Category -eq 'Operating System')
         $patchRows = Convert-CATResultToRows @($srvResults | Where-Object Category -eq 'Patch Evidence')
         $connectRows = Convert-CATResultToRows @($srvResults | Where-Object Category -eq 'Connectivity')
         $storageRows = Convert-CATResultToRows @($srvResults | Where-Object Category -eq 'Storage')
         $memoryRows = Convert-CATResultToRows @($srvResults | Where-Object Category -eq 'Memory')
         $cpuRows = Convert-CATResultToRows @($srvResults | Where-Object Category -eq 'CPU')
-        $serviceRows = Convert-CATResultToRows @($srvResults | Where-Object Category -eq 'Services')
+        $serviceRows = Convert-CATResultToRows @($srvCoreResults | Where-Object Category -eq 'Services')
+        $mpRows = Convert-CATResultToRows @($srvMpResults)
+        $mpConnectivityRows = Convert-CATResultToRows @($srvMpResults | Where-Object Category -eq 'Connectivity')
+        $mpServiceRows = Convert-CATResultToRows @($srvMpResults | Where-Object Category -eq 'Services')
+        $mpIisRows = Convert-CATResultToRows @($srvMpResults | Where-Object Category -eq 'IIS')
+        $mpCertRows = Convert-CATResultToRows @($srvMpResults | Where-Object Category -eq 'Certificates')
+        $mpLogRows = Convert-CATResultToRows @($srvMpResults | Where-Object Category -eq 'Logs')
+        $mpLiveRows = Convert-CATResultToRows @($srvMpResults | Where-Object Category -eq 'Live Test')
         $storageCards = foreach($d in @($srvResults | Where-Object Category -eq 'Storage')){
             $pct = 0; $free = '' ; $total = ''
             if($d.Value -match 'Free=([^;]+); FreePct=([0-9\.]+)%'){ $free = $Matches[1]; $pct=[double]$Matches[2] }
@@ -128,6 +144,7 @@ function Export-CATHtmlReport {
       <button onclick="showTab(this,'os')">Operating System</button>
       <button onclick="showTab(this,'storage')">Storage</button>
       <button onclick="showTab(this,'services')">Services</button>
+      <button onclick="showTab(this,'mp')">Management Point</button>
     </div>
     <div class="tab-panel overview active">
       <div class="mini-grid">
@@ -152,6 +169,20 @@ function Export-CATHtmlReport {
       <h4>Services</h4>
       $(New-CATReportTable -Rows $serviceRows -Columns @('Check','Status','Value','Finding'))
     </div>
+    <div class="tab-panel mp">
+      <h4>Management Point - Connectivity</h4>
+      $(New-CATReportTable -Rows $mpConnectivityRows -Columns @('Check','Status','Value','Finding','Evidence'))
+      <h4>Management Point - Services</h4>
+      $(New-CATReportTable -Rows $mpServiceRows -Columns @('Check','Status','Value','Finding','Evidence'))
+      <h4>Management Point - IIS</h4>
+      $(New-CATReportTable -Rows $mpIisRows -Columns @('Check','Status','Value','Finding','Recommendation','Evidence'))
+      <h4>Management Point - Certificates</h4>
+      $(New-CATReportTable -Rows $mpCertRows -Columns @('Check','Status','Value','Finding','Recommendation','Evidence'))
+      <h4>Management Point - Logs and Live Tests</h4>
+      $(New-CATReportTable -Rows (@($mpLogRows) + @($mpLiveRows)) -Columns @('Check','Status','Value','Finding','Recommendation','Evidence'))
+      <h4>Management Point - All Evidence</h4>
+      $(New-CATReportTable -Rows $mpRows -Columns @('Check','Status','Value','Finding','Recommendation','Evidence'))
+    </div>
   </div>
 </section>
 "@
@@ -159,7 +190,7 @@ function Export-CATHtmlReport {
     }
 
     $css = @'
-:root{--bg:#f5f7fb;--card:#fff;--text:#1d1d1f;--muted:#606975;--line:#dde3ea;--green:#25a55b;--yellow:#d99a16;--red:#d63b3b;--blue:#2f6fed;--gray:#7b8794}*{box-sizing:border-box}body{margin:0;font-family:Segoe UI,Arial,sans-serif;background:var(--bg);color:var(--text)}header{position:sticky;top:0;z-index:2;background:#fff;border-bottom:1px solid var(--line);padding:18px 26px;box-shadow:0 2px 10px rgba(0,0,0,.04)}h1{margin:0;font-size:26px}.subtitle{color:var(--muted);margin-top:6px}.layout{display:grid;grid-template-columns:280px 1fr;gap:18px;padding:18px}.side{position:sticky;top:104px;align-self:start}.panel{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:14px;box-shadow:0 1px 5px rgba(0,0,0,.04)}.metric{display:flex;justify-content:space-between;margin:8px 0}.metric strong{font-size:18px}.filters input,.filters select{width:100%;margin:6px 0 10px 0;padding:9px;border:1px solid var(--line);border-radius:8px}.server-card{background:var(--card);border:1px solid var(--line);border-radius:14px;margin-bottom:14px;overflow:hidden;box-shadow:0 1px 6px rgba(0,0,0,.04)}.server-card.critical{border-left:6px solid var(--red)}.server-card.warning{border-left:6px solid var(--yellow)}.server-card.healthy{border-left:6px solid var(--green)}.server-card.unable{border-left:6px solid var(--gray)}.server-header{width:100%;background:#fff;border:0;border-bottom:1px solid var(--line);padding:16px 18px;display:flex;justify-content:space-between;align-items:center;font-size:18px;cursor:pointer;text-align:left}.server-title{font-weight:700;display:flex;align-items:center;gap:8px}.server-icon{display:inline-block;width:18px;height:14px;border:2px solid #46515e;border-radius:2px;position:relative}.server-icon:after{content:"";position:absolute;left:5px;right:5px;bottom:-6px;height:2px;background:#46515e;box-shadow:0 3px 0 #46515e}.server-body{padding:16px 18px}.roles{margin-bottom:12px}.badge{display:inline-block;background:#eef4ff;color:#1d4f91;border:1px solid #c9ddff;border-radius:999px;padding:4px 9px;margin:2px;font-size:12px;font-weight:600}.badge.muted{background:#f0f0f0;color:#666;border-color:#ddd}.dot{display:inline-block;width:12px;height:12px;border-radius:50%;margin-right:8px;vertical-align:middle}.dot.healthy{background:var(--green)}.dot.warning{background:var(--yellow)}.dot.critical{background:var(--red)}.dot.unable{background:var(--gray)}.dot.info{background:var(--blue)}.dot.na{background:#c9ced6}.summary-row{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.summary-card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px}.summary-card span{color:var(--muted)}.summary-card strong{display:block;font-size:24px;margin-top:4px}.tabs-mini{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}.tabs-mini button{border:1px solid var(--line);background:#f7f9fc;border-radius:999px;padding:7px 12px;cursor:pointer}.tabs-mini button.active{background:#1f6feb;color:#fff;border-color:#1f6feb}.tab-panel{display:none}.tab-panel.active{display:block}.mini-grid{display:grid;grid-template-columns:1fr;gap:14px}.cat-table{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--line);border-radius:8px;overflow:hidden}.cat-table th{background:#f2f5f9;text-align:left;padding:9px;border-bottom:1px solid var(--line);font-size:12px;color:#46515e}.cat-table td{padding:9px;border-bottom:1px solid #eef1f5;vertical-align:top;font-size:13px}.statuscell{white-space:nowrap}.disk-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px}.disk-card{border:1px solid var(--line);border-radius:12px;padding:12px;background:#fbfcfe}.disk-head{display:flex;justify-content:space-between;margin-bottom:10px}.bar{height:12px;background:#e9edf3;border-radius:999px;overflow:hidden}.bar span{display:block;height:100%;border-radius:999px}.bar span.healthy{background:var(--green)}.bar span.warning{background:var(--yellow)}.bar span.critical{background:var(--red)}.bar span.info{background:var(--blue)}.disk-meta{color:var(--muted);font-size:12px;margin-top:8px}.empty{color:var(--muted);font-style:italic;padding:10px}.hidden{display:none!important}.toc{max-height:360px;overflow:auto}.toc a{display:block;color:#1f6feb;text-decoration:none;margin:6px 0;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}@media(max-width:950px){.layout{grid-template-columns:1fr}.side{position:static}.summary-row{grid-template-columns:repeat(2,1fr)}}
+:root{--bg:#f5f7fb;--card:#fff;--text:#1d1d1f;--muted:#606975;--line:#dde3ea;--green:#25a55b;--yellow:#d99a16;--red:#d63b3b;--blue:#2f6fed;--gray:#7b8794}*{box-sizing:border-box}body{margin:0;font-family:Segoe UI,Arial,sans-serif;background:var(--bg);color:var(--text)}header{position:sticky;top:0;z-index:2;background:#fff;border-bottom:1px solid var(--line);padding:18px 26px;box-shadow:0 2px 10px rgba(0,0,0,.04)}h1{margin:0;font-size:26px}.subtitle{color:var(--muted);margin-top:6px}.layout{display:grid;grid-template-columns:280px 1fr;gap:18px;padding:18px}.side{position:sticky;top:104px;align-self:start}.panel{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:14px;box-shadow:0 1px 5px rgba(0,0,0,.04)}.metric{display:flex;justify-content:space-between;margin:8px 0}.metric strong{font-size:18px}.filters input,.filters select{width:100%;margin:6px 0 10px 0;padding:9px;border:1px solid var(--line);border-radius:8px}.server-card{background:var(--card);border:1px solid var(--line);border-radius:14px;margin-bottom:14px;overflow:hidden;box-shadow:0 1px 6px rgba(0,0,0,.04)}.server-card.critical{border-left:6px solid var(--red)}.server-card.warning{border-left:6px solid var(--yellow)}.server-card.healthy{border-left:6px solid var(--green)}.server-card.unable{border-left:6px solid var(--gray)}.server-header{width:100%;background:#fff;border:0;border-bottom:1px solid var(--line);padding:16px 18px;display:flex;justify-content:space-between;align-items:center;font-size:18px;cursor:pointer;text-align:left}.server-title{font-weight:700;display:flex;align-items:center;gap:8px}.server-icon{display:inline-block;width:18px;height:14px;border:2px solid #46515e;border-radius:2px;position:relative}.server-icon:after{content:"";position:absolute;left:5px;right:5px;bottom:-6px;height:2px;background:#46515e;box-shadow:0 3px 0 #46515e}.server-body{padding:16px 18px}.roles{margin-bottom:12px}.badge{display:inline-block;background:#eef4ff;color:#1d4f91;border:1px solid #c9ddff;border-radius:999px;padding:4px 9px;margin:2px;font-size:12px;font-weight:600}.badge.muted{background:#f0f0f0;color:#666;border-color:#ddd}.badge.healthy{background:#eefaf2;color:#176a3a;border-color:#bde8cd}.badge.warning{background:#fff7e8;color:#8a5a00;border-color:#f2d38b}.badge.critical{background:#fff0f0;color:#9c2020;border-color:#f1b0b0}.badge.unabletocheck{background:#f2f4f7;color:#46515e;border-color:#cfd6df}.dot{display:inline-block;width:12px;height:12px;border-radius:50%;margin-right:8px;vertical-align:middle}.dot.healthy{background:var(--green)}.dot.warning{background:var(--yellow)}.dot.critical{background:var(--red)}.dot.unable{background:var(--gray)}.dot.info{background:var(--blue)}.dot.na{background:#c9ced6}.summary-row{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.summary-card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px}.summary-card span{color:var(--muted)}.summary-card strong{display:block;font-size:24px;margin-top:4px}.tabs-mini{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}.tabs-mini button{border:1px solid var(--line);background:#f7f9fc;border-radius:999px;padding:7px 12px;cursor:pointer}.tabs-mini button.active{background:#1f6feb;color:#fff;border-color:#1f6feb}.tab-panel{display:none}.tab-panel.active{display:block}.mini-grid{display:grid;grid-template-columns:1fr;gap:14px}.cat-table{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--line);border-radius:8px;overflow:hidden}.cat-table th{background:#f2f5f9;text-align:left;padding:9px;border-bottom:1px solid var(--line);font-size:12px;color:#46515e}.cat-table td{padding:9px;border-bottom:1px solid #eef1f5;vertical-align:top;font-size:13px}.statuscell{white-space:nowrap}.disk-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px}.disk-card{border:1px solid var(--line);border-radius:12px;padding:12px;background:#fbfcfe}.disk-head{display:flex;justify-content:space-between;margin-bottom:10px}.bar{height:12px;background:#e9edf3;border-radius:999px;overflow:hidden}.bar span{display:block;height:100%;border-radius:999px}.bar span.healthy{background:var(--green)}.bar span.warning{background:var(--yellow)}.bar span.critical{background:var(--red)}.bar span.info{background:var(--blue)}.disk-meta{color:var(--muted);font-size:12px;margin-top:8px}.empty{color:var(--muted);font-style:italic;padding:10px}.hidden{display:none!important}.toc{max-height:360px;overflow:auto}.toc a{display:block;color:#1f6feb;text-decoration:none;margin:6px 0;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}@media(max-width:950px){.layout{grid-template-columns:1fr}.side{position:static}.summary-row{grid-template-columns:repeat(2,1fr)}}
 '@
     $toc = ($servers | ForEach-Object { $anchor = ($_ -replace '[^A-Za-z0-9_-]','_'); '<a href="#' + $anchor + '">' + (ConvertTo-CATHtmlEncoded $_) + '</a>' }) -join "`n"
     $html = @"
@@ -174,7 +205,7 @@ function Export-CATHtmlReport {
 <body>
 <header>
   <h1>ConfigMgr Assessment Tool by J. Maia</h1>
-  <div class="subtitle">Version 1.4.1-alpha | Build 0012 | Assessment ID: $(ConvertTo-CATHtmlEncoded $Session.AssessmentID) | Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')</div>
+  <div class="subtitle">Version 2.0.0-alpha | Build 0013 | Assessment ID: $(ConvertTo-CATHtmlEncoded $Session.AssessmentID) | Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')</div>
 </header>
 <div class="layout">
   <aside class="side">
