@@ -1,16 +1,16 @@
 # Management Point Assessment Specification
 
-Version: 2.0.3-alpha Build 0016
+Version: 2.0.1-alpha Build 0014
 
 ## Scope
 
-Build 0016 focuses on the first real Management Point assessment layer: connectivity, core services and IIS prerequisites.
+Build 0014 focuses on the first real Management Point assessment layer: connectivity, core services and IIS prerequisites.
 
 ## Evidence model
 
 Every non-healthy finding must include evidence, source and recommendation. The tool does not infer compliance without collected evidence.
 
-## Checks in Build 0016
+## Checks in Build 0014
 
 ### MP-001 Role discovery
 Source: Discovery inventory / SMS_SystemResourceList.
@@ -29,6 +29,6 @@ Checks IIS request filtering for GET, POST, CCM_POST, HEAD and PROPFIND.
 
 ## Future builds
 
-Build 0016: certificates, HTTPS/Enhanced HTTP and endpoint tests.
+Build 0017: certificates, HTTPS/Enhanced HTTP and endpoint tests.
 
 Build 0016: MPControl.log evidence mode.

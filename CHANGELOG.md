@@ -1,14 +1,8 @@
 # Changelog
 
-## v2.0.3-alpha Build 0016
-
-- Adds Management Point Evidence Mode for MPControl.log.
-- Classifies latest MPControl.log signal as Healthy, Warning or Critical using known availability patterns.
-- Adds MP Evidence section to the HTML report.
-- Enhances service evidence with display name, startup mode and service account.
-- Treats BITS stopped with manual/trigger-start semantics as healthy unless symptoms exist.
-
-## v2.0.2-alpha Build 0015
-
-- Blocks HTML generation with a clear message when MP assessment has not been executed.
-- Keeps Build 0014 MP checks intact.
+## v2.0.4-alpha Build 0017
+- Hotfix release: restores the stable Management Point engine after rejected Build 0016 parser error.
+- Uses the last validated MP implementation from Build 0015 as the baseline.
+- Keeps Run MP output working in the HTML report: Connectivity, Services and IIS sections.
+- Keeps the HTML guard that warns if MP roles exist but Run MP was not executed before report generation.
+- No new MPControl.log Evidence Mode changes are included in this hotfix; that feature will return in a later build after validation.
