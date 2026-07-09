@@ -1,17 +1,12 @@
 # ConfigMgr Assessment Tool by J. Maia
 
-Version 2.0.7-alpha | Build 0020
+Version 2.0.5-alpha | Build 0018
 
-Stable merge build that preserves the Build 0018 workflow/interface and the functional Management Point assessment/reporting path validated in the previous builds.
+Recommended flow:
 
-## Test flow
+1. Run Discovery
+2. Run Core Health
+3. Run MP
+4. HTML Report
 
-1. Open `ConfigMgrAssessmentTool.ps1` with PowerShell.
-2. Enter Site Code and SMS Provider.
-3. Click **Discovery**.
-4. Click **HTML Report**.
-5. Click **Open Output** if needed.
-
-## Notes
-
-This build intentionally focuses on stabilization and merge correction before continuing the next Management Point enhancements.
+This build prevents empty Management Point report sections by warning when MP roles were discovered but the MP assessment was not executed yet.

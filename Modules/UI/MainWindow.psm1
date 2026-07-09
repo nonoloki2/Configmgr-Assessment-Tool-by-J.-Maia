@@ -9,7 +9,7 @@ function Show-CATMainWindow {
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="ConfigMgr Assessment Tool by J. Maia" Height="780" Width="1280" MinHeight="720" MinWidth="1160"
         WindowStartupLocation="CenterScreen" Background="#F3F3F3" FontFamily="Segoe UI" FontSize="12"
-        ResizeMode="CanResizeWithGrip" ShowInTaskbar="True">
+        WindowStyle="SingleBorderWindow" ResizeMode="CanResize" ShowInTaskbar="True">
     <Grid Margin="12">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
@@ -26,7 +26,7 @@ function Show-CATMainWindow {
                 </Grid.ColumnDefinitions>
                 <StackPanel Grid.Column="0">
                     <TextBlock Text="ConfigMgr Assessment Tool by J. Maia" FontSize="24" FontWeight="SemiBold" Foreground="#222"/>
-                    <TextBlock Name="txtVersion" Text="Version 2.0.7-alpha | Build 0020 | Window Chrome Hotfix" Margin="0,4,0,0" Foreground="#555"/>
+                    <TextBlock Name="txtVersion" Text="Version 2.0.5-alpha | Build 0018 | Workflow and UX Refactoring" Margin="0,4,0,0" Foreground="#555"/>
                     <TextBlock Name="txtAssessmentID" Text="Assessment ID:" Margin="0,8,0,0" Foreground="#555"/>
                 </StackPanel>
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top">

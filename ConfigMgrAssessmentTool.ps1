@@ -1,7 +1,7 @@
 <#
  ConfigMgr Assessment Tool by J. Maia
- Version 2.0.7-alpha | Build 0020
- Phase: Window Chrome Hotfix + Workflow + MP Assessment
+ Version 2.0.5-alpha | Build 0018
+ Phase: MP Connectivity, Services and IIS Prerequisites
 #>
 [CmdletBinding()]
 param()
