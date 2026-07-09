@@ -1,17 +1,14 @@
 # Changelog
 
-## v2.0.5-alpha Build 0018 - Workflow and UX Refactoring
+## v2.0.6-alpha Build 0019 - Stable Merge - Workflow + MP Assessment
 
-- Restored standard Windows window controls through explicit WindowStyle and ResizeMode.
-- Removed the Exit button from the UI.
-- Consolidated Run Discovery, Run Core Health and Run MP into a single **Discovery** workflow button.
-- Added clean run reset logic so the full assessment can be executed again in the same application session.
-- Reorganized toolbar buttons to avoid Open Output truncation and provide room for future modules.
-- Discovery now orchestrates: Discovery Engine, Core Health Engine, Management Point Engine and CSV export.
+### Fixed
+- Restored the stable single-button workflow from Build 0018.
+- Preserved the functional Management Point HTML/reporting behavior validated in Build 0017/0018.
+- Avoided the broken RepoReady regression that rolled the project back to an older code base.
 
-## v2.0.4-alpha Build 0017
-- Hotfix release: restores the stable Management Point engine after rejected Build 0016 parser error.
-- Uses the last validated MP implementation from Build 0015 as the baseline.
-- Keeps Run MP output working in the HTML report: Connectivity, Services and IIS sections.
-- Keeps the HTML guard that warns if MP roles exist but Run MP was not executed before report generation.
-- No new MPControl.log Evidence Mode changes are included in this hotfix; that feature will return in a later build after validation.
+### Included
+- Single **Discovery** button runs Discovery -> Core Health -> Management Point -> CSV.
+- Standard Windows title bar controls.
+- HTML Report and Open Output buttons preserved.
+- Management Point section remains populated when MP assessment results exist.
