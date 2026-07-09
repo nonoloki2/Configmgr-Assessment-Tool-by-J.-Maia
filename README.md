@@ -1,6 +1,6 @@
 # ConfigMgr Assessment Tool by J. Maia
 
-Version 2.0.6-alpha | Build 0019
+Version 2.0.7-alpha | Build 0020
 
 Stable merge build that preserves the Build 0018 workflow/interface and the functional Management Point assessment/reporting path validated in the previous builds.
 

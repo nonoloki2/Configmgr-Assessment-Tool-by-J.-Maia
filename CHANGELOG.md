@@ -1,6 +1,13 @@
 # Changelog
 
-## v2.0.6-alpha Build 0019 - Stable Merge - Workflow + MP Assessment
+## v2.0.7-alpha Build 0020
+- Window chrome hotfix: standard Windows minimize, maximize, and close controls.
+- Preserves Build 0019 workflow and Management Point HTML data.
+- Keeps single Discovery button workflow.
+
+# Changelog
+
+## v2.0.7-alpha Build 0020 - Stable Merge - Workflow + MP Assessment
 
 ### Fixed
 - Restored the stable single-button workflow from Build 0018.
