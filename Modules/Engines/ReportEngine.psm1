@@ -1,4 +1,4 @@
-function ConvertTo-CATHtmlEncoded {
+﻿function ConvertTo-CATHtmlEncoded {
     param([AllowNull()][object]$Value)
     if ($null -eq $Value) { return '' }
     return [System.Net.WebUtility]::HtmlEncode([string]$Value)
@@ -101,6 +101,7 @@ function Export-CATHtmlReport {
     $all = @($Session.Results)
     $core = @($all | Where-Object { $_.Module -eq 'CoreHealth' -and $_.Target })
     $mpAll = @($all | Where-Object { $_.Module -eq 'ManagementPoint' -and $_.Target })
+    $dpAll = @($all | Where-Object { $_.Module -eq 'DistributionPoint' -and $_.Target })
     $servers = @($Session.Inventory.Servers | Sort-Object -Unique)
     if(-not $servers -or $servers.Count -eq 0){ $servers = @($core | Select-Object -ExpandProperty Target -Unique | Sort-Object) }
 
@@ -116,7 +117,8 @@ function Export-CATHtmlReport {
     foreach($server in $servers){
         $srvCoreResults = @($core | Where-Object { Test-CATServerNameMatch $_.Target $server })
         $srvMpResults = @($mpAll | Where-Object { Test-CATServerNameMatch $_.Target $server })
-        $srvResults = @($srvCoreResults + $srvMpResults)
+        $srvDpResults = @($dpAll | Where-Object { Test-CATServerNameMatch $_.Target $server })
+        $srvResults = @($srvCoreResults + $srvMpResults + $srvDpResults)
         $roles = @($Session.Inventory.Roles | Where-Object { Test-CATServerNameMatch $_.ServerName $server } | Select-Object -ExpandProperty RoleName -Unique)
         $status = Get-CATWorstStatus -Items $srvResults
         $statusClass = switch($status){ 'Critical'{'critical'} 'Warning'{'warning'} 'UnableToCheck'{'unable'} 'Healthy'{'healthy'} default{'info'} }
@@ -141,6 +143,7 @@ function Export-CATHtmlReport {
         $mpCertRows = Convert-CATResultToRows @($srvMpResults | Where-Object Category -eq 'Certificates')
         $mpLogRows = Convert-CATResultToRows @($srvMpResults | Where-Object Category -eq 'Logs')
         $mpLiveRows = Convert-CATResultToRows @($srvMpResults | Where-Object Category -eq 'Live Test')
+        $dpRows = Convert-CATResultToRows @($srvDpResults)
 
         if((($roles -join " ") -like "*Management Point*") -and @($srvMpResults).Count -eq 0){
             $mpNotRun = @([pscustomobject]@{
@@ -171,6 +174,7 @@ function Export-CATHtmlReport {
       <button onclick="showTab(this,'storage')">Storage</button>
       <button onclick="showTab(this,'services')">Services</button>
       $(if(($roles -join " ") -like "*Management Point*" -or @($srvMpResults).Count -gt 0){'<button onclick="showTab(this,''mp'')">Management Point</button>'})
+      $(if(($roles -join " ") -like "*Distribution Point*" -or @($srvDpResults).Count -gt 0){'<button onclick="showTab(this,''dp'')">Distribution Point</button>'})
     </div>
     <div class="tab-panel overview active">
       <div class="mini-grid">
@@ -194,6 +198,10 @@ function Export-CATHtmlReport {
     <div class="tab-panel services">
       <h4>Services</h4>
       $(New-CATReportTable -Rows $serviceRows -Columns @('Check','Status','Value','Finding'))
+    </div>
+    <div class="tab-panel dp">
+      <h4>Distribution Point Assessment</h4>
+      $(New-CATReportTable -Rows $dpRows -Columns @('Check','Status','Value','Finding','Recommendation','Evidence'))
     </div>
     <div class="tab-panel mp">
       <h4>Management Point - Connectivity</h4>
@@ -231,7 +239,7 @@ function Export-CATHtmlReport {
 <body>
 <header>
   <h1>ConfigMgr Assessment Tool by J. Maia</h1>
-  <div class="subtitle">Version 2.0.4-alpha | Build 0017 | Assessment ID: $(ConvertTo-CATHtmlEncoded $Session.AssessmentID) | Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')</div>
+  <div class="subtitle">Version 2.0.6-alpha | Build 0019 | Assessment ID: $(ConvertTo-CATHtmlEncoded $Session.AssessmentID) | Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')</div>
 </header>
 <div class="layout">
   <aside class="side">

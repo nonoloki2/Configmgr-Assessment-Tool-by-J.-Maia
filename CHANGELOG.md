@@ -1,5 +1,15 @@
 # Changelog
 
+## v2.0.6-alpha Build 0019 - Distribution Point Assessment
+
+- Added a dedicated `DistributionPointEngine.psm1` module.
+- Integrated Distribution Point assessment as step 4/4 of the existing workflow.
+- Added read-only checks for DNS, ping, CIM, W3SVC, SMS_EXECUTIVE, DP shares, Content Library location, free space, drive exclusion markers and SMS Provider DP configuration.
+- Added Distribution Point results to CSV and HTML reports.
+- Preserved the exact stable WPF window dimensions and native minimize, maximize and close behavior from Build 0018.
+- No remediation or environment modification actions are performed.
+
+
 ## v2.0.5-alpha Build 0018 - Workflow and UX Refactoring
 
 - Restored standard Windows window controls through explicit WindowStyle and ResizeMode.
