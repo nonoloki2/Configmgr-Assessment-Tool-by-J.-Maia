@@ -1,4 +1,4 @@
-﻿function Show-CATMainWindow {
+function Show-CATMainWindow {
     [CmdletBinding()]
     param([object]$Session)
 
@@ -7,7 +7,7 @@
     [xml]$xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="ConfigMgr Assessment Tool by J. Maia" Height="780" Width="1280" MinHeight="720" MinWidth="1160"
+        Title="ConfigMgr Assessment Tool by J. Maia" Height="660" Width="1180" MinHeight="560" MinWidth="900"
         WindowStartupLocation="CenterScreen" Background="#F3F3F3" FontFamily="Segoe UI" FontSize="12"
         WindowStyle="SingleBorderWindow" ResizeMode="CanResize" ShowInTaskbar="True">
     <Grid Margin="12">
@@ -26,7 +26,7 @@
                 </Grid.ColumnDefinitions>
                 <StackPanel Grid.Column="0">
                     <TextBlock Text="ConfigMgr Assessment Tool by J. Maia" FontSize="24" FontWeight="SemiBold" Foreground="#222"/>
-                    <TextBlock Name="txtVersion" Text="Version 2.0.6-alpha | Build 0019 | Distribution Point Assessment" Margin="0,4,0,0" Foreground="#555"/>
+                    <TextBlock Name="txtVersion" Text="Version 2.0.9-alpha | Build 0025 | Visible Native Window Controls Fix" Margin="0,4,0,0" Foreground="#555"/>
                     <TextBlock Name="txtAssessmentID" Text="Assessment ID:" Margin="0,8,0,0" Foreground="#555"/>
                 </StackPanel>
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Top">
@@ -58,7 +58,7 @@
                 <TextBlock Grid.Column="2" Text="SMS Provider" VerticalAlignment="Center" FontWeight="SemiBold" Margin="0,0,8,0"/>
                 <TextBox Grid.Column="3" Name="txtProvider" Height="28" Padding="7,3,7,3" VerticalContentAlignment="Center" HorizontalContentAlignment="Left" Margin="0,0,16,0"/>
                 <TextBlock Grid.Column="4" Name="txtCurrentTask" Text="Current task: Ready" VerticalAlignment="Center" Foreground="#555" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" ToolTip="Current task: Ready"/>
-                <Button Grid.Column="5" Name="btnDiscovery" Content="Discovery" Height="30" Margin="8,0,8,0" ToolTip="Run Discovery, Core Health, Management Point and Distribution Point assessment in sequence."/>
+                <Button Grid.Column="5" Name="btnDiscovery" Content="Discovery" Height="30" Margin="8,0,8,0" ToolTip="Run Discovery, Core Health and Management Point assessment in sequence."/>
                 <Button Grid.Column="6" Name="btnExport" Content="Export CSV" Height="30" Margin="0,0,8,0" IsEnabled="False"/>
                 <Button Grid.Column="7" Name="btnHtml" Content="HTML Report" Height="30" Margin="0,0,8,0" IsEnabled="False"/>
                 <Button Grid.Column="8" Name="btnOpenOutput" Content="Open Output" Height="30" Margin="0,0,0,0" IsEnabled="False"/>
@@ -151,6 +151,28 @@
     $reader = New-Object System.Xml.XmlNodeReader $xaml
     $window = [Windows.Markup.XamlReader]::Load($reader)
 
+    # Build 0025 safety guard: keep native Windows title bar/buttons visible even on low-height RDP sessions.
+    # Previous builds used a fixed 780px height; on 768px displays the native title bar could open above the visible screen.
+    $window.WindowStyle = [System.Windows.WindowStyle]::SingleBorderWindow
+    $window.ResizeMode = [System.Windows.ResizeMode]::CanResize
+    $window.ShowInTaskbar = $true
+    $window.WindowState = [System.Windows.WindowState]::Normal
+
+    try {
+        $workArea = [System.Windows.SystemParameters]::WorkArea
+        $window.MaxHeight = [Math]::Max(500, ($workArea.Height - 40))
+        $window.MaxWidth  = [Math]::Max(800, ($workArea.Width  - 40))
+        if ($window.Height -gt $window.MaxHeight) { $window.Height = $window.MaxHeight }
+        if ($window.Width  -gt $window.MaxWidth)  { $window.Width  = $window.MaxWidth }
+        $window.WindowStartupLocation = [System.Windows.WindowStartupLocation]::Manual
+        $window.Left = $workArea.Left + 20
+        $window.Top  = $workArea.Top  + 20
+    } catch {
+        $window.Height = 660
+        $window.Width = 1180
+        $window.WindowStartupLocation = [System.Windows.WindowStartupLocation]::CenterScreen
+    }
+
     $names = 'txtVersion','txtAssessmentID','txtHeaderStatus','txtSiteCode','txtProvider','txtCurrentTask','txtCompletion','btnDiscovery','btnExport','btnHtml','btnOpenOutput','sumServers','sumRoles','sumMP','sumDP','sumSUP','sumRP','treeTopology','progressBar','txtElapsed','gridResults','txtLog','txtDebug','statusLeft','statusLog','statusCsv'
     $ui = @{}
     foreach($n in $names){ $ui[$n] = $window.FindName($n) }
@@ -206,7 +228,6 @@
         $Session.Inventory.BoundaryGroups = @()
         $Session.Inventory.CoreHealth = $null
         $Session.Inventory.HealthScore = $null
-        $Session.Inventory.DistributionPointAssessment = $null
         $Session.LastCsvPath = $null
         $Session.LastHtmlPath = $null
         $ui.gridResults.ItemsSource = $null
@@ -285,13 +306,13 @@
             $progressCb = { param($p,$task) $ui.progressBar.Value = $p; Set-CurrentTaskText $task }
             $logCb = { param($msg,$level) Add-UiLog $msg $level }
 
-            Add-UiLog 'Step 1/4 - Discovery started.'
+            Add-UiLog 'Step 1/3 - Discovery started.'
             Invoke-CATDiscovery -Session $Session -SiteCode $ui.txtSiteCode.Text -ProviderServer $ui.txtProvider.Text -ProgressCallback $progressCb -LogCallback $logCb | Out-Null
             Update-Summary
             Update-Topology
             Refresh-Results
 
-            Add-UiLog 'Step 2/4 - Core Health started.'
+            Add-UiLog 'Step 2/3 - Core Health started.'
             $ui.progressBar.Value = 0
             $coreSummary = Invoke-CATCoreHealth -Session $Session -ProgressCallback $progressCb -LogCallback $logCb
             Refresh-Results
@@ -299,23 +320,12 @@
             $mpSummary = $null
             $mpCount = @($Session.Inventory.Roles | Where-Object RoleName -like '*Management Point*').Count
             if ($mpCount -gt 0) {
-                Add-UiLog 'Step 3/4 - Management Point assessment started.'
+                Add-UiLog 'Step 3/3 - Management Point assessment started.'
                 $ui.progressBar.Value = 0
                 $mpSummary = Invoke-CATManagementPointAssessment -Session $Session -ProgressCallback $progressCb -LogCallback $logCb
                 Refresh-Results
             } else {
-                Add-UiLog 'Step 3/4 - Management Point assessment skipped. No MP role found.' 'INFO'
-            }
-
-            $dpSummary = $null
-            $dpCount = @($Session.Inventory.Roles | Where-Object RoleName -like '*Distribution Point*').Count
-            if ($dpCount -gt 0) {
-                Add-UiLog 'Step 4/4 - Distribution Point assessment started.'
-                $ui.progressBar.Value = 0
-                $dpSummary = Invoke-CATDistributionPointAssessment -Session $Session -ProgressCallback $progressCb -LogCallback $logCb
-                Refresh-Results
-            } else {
-                Add-UiLog 'Step 4/4 - Distribution Point assessment skipped. No DP role found.' 'INFO'
+                Add-UiLog 'Step 3/3 - Management Point assessment skipped. No MP role found.' 'INFO'
             }
 
             $csv = Export-CATCsv -Session $Session
@@ -329,8 +339,7 @@
             $serverCount = @($Session.Inventory.Servers).Count
             $roleCount = @($Session.Inventory.Roles).Count
             $mpText = if ($mpSummary) { ' | MPs: {0} | MP Warning: {1} | MP Critical: {2}' -f $mpSummary.ManagementPoints,$mpSummary.Warning,$mpSummary.Critical } else { ' | MPs: 0' }
-            $dpText = if ($dpSummary) { ' | DPs: {0} | DP Warning: {1} | DP Critical: {2}' -f $dpSummary.DistributionPoints,$dpSummary.Warning,$dpSummary.Critical } else { ' | DPs: 0' }
-            $summary = 'Assessment completed | Servers: {0} | Roles: {1}{2}{3} | CSV exported | Elapsed: {4}' -f $serverCount,$roleCount,$mpText,$dpText,$elapsedText
+            $summary = 'Assessment completed | Servers: {0} | Roles: {1}{2} | CSV exported | Elapsed: {3}' -f $serverCount,$roleCount,$mpText,$elapsedText
             $ui.txtHeaderStatus.Text = 'Completed'
             $ui.txtHeaderStatus.Foreground = 'Green'
             Set-CurrentTaskText 'Assessment completed - Ready for next action'
@@ -339,7 +348,7 @@
             $ui.progressBar.Value = 100
             $ui.btnOpenOutput.IsEnabled = $true
             $ui.btnHtml.IsEnabled = $true
-            $ui.txtDebug.Text = "AssessmentID: $($Session.AssessmentID)`r`nLogFile: $($Session.LogFile)`r`nCSV: $csv`r`nServers: $serverCount`r`nRoles: $roleCount`r`nCoreHealth Servers: $($coreSummary.Servers)`r`nDistribution Points: $dpCount`r`nElapsed: $elapsedText"
+            $ui.txtDebug.Text = "AssessmentID: $($Session.AssessmentID)`r`nLogFile: $($Session.LogFile)`r`nCSV: $csv`r`nServers: $serverCount`r`nRoles: $roleCount`r`nCoreHealth Servers: $($coreSummary.Servers)`r`nElapsed: $elapsedText"
             [System.Windows.MessageBox]::Show($summary + "`n`nCSV:`n$csv", 'Assessment completed', 'OK', 'Information') | Out-Null
         } catch {
             if ($script:CATDiscoveryStopwatch -and $script:CATDiscoveryStopwatch.IsRunning) { $script:CATDiscoveryStopwatch.Stop() }
