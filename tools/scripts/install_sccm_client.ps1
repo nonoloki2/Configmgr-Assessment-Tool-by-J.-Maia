@@ -1,0 +1,1 @@
+\\maznasccmp01.na.admworld.com\client\ccmsetup.exe /mp:MAZNASCCMP01.na.admworld.com SMSSITECODE=PR1 /ResetKeyExchange /forceinstall

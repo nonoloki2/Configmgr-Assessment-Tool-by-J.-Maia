@@ -1,0 +1,1 @@
+Get-PSDrive -PSProvider 'FileSystem' | Select-Object Name, @{Name="FreeSpace(GB)";Expression={[math]::round($_.Free/1GB,2)}}, @{Name="UsedSpace(GB)";Expression={[math]::round(($_.Used)/1GB,2)}}, @{Name="TotalSize(GB)";Expression={[math]::round($_.Used/1GB + $_.Free/1GB,2)}}
