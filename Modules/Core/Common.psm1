@@ -1,11 +1,11 @@
-function Get-CATSettings {
+﻿function Get-CATSettings {
     [CmdletBinding()]
     param([string]$Path,[string]$AppRoot)
     if (-not (Test-Path -LiteralPath $Path)) {
         $default = [ordered]@{
             ApplicationName = 'ConfigMgr Assessment Tool by J. Maia'
-            Version = '2.0.5-alpha'
-            Build = '0018'
+            Version = '2.0.6-alpha'
+            Build = '0019'
             Theme = 'Light'
             TimeoutSeconds = 30
             MaxThreads = 8
@@ -57,6 +57,7 @@ function New-CATAssessmentSession {
             BoundaryGroups = @()
             CoreHealth = $null
             HealthScore = $null
+            DistributionPointAssessment = $null
         }
         LogFile = $null
         LastCsvPath = $null
@@ -102,8 +103,8 @@ function New-CATResult {
         Source = $Source
         RuleId = $RuleId
         DurationSeconds = $DurationSeconds
-        ToolVersion = '2.0.5-alpha'
-        Build = '0018'
+        ToolVersion = '2.0.6-alpha'
+        Build = '0019'
     }
 }
 

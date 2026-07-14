@@ -1,1 +1,51 @@
-{"module":"DP","rules":[]}
+{
+  "module": "DP",
+  "version": "2.0.6-alpha",
+  "build": "0019",
+  "rules": [
+    {
+      "id": "DP-CONN-001",
+      "title": "DNS Resolution"
+    },
+    {
+      "id": "DP-CONN-002",
+      "title": "Ping"
+    },
+    {
+      "id": "DP-CONN-003",
+      "title": "CIM Session"
+    },
+    {
+      "id": "DP-SVC-001",
+      "title": "World Wide Web Publishing Service"
+    },
+    {
+      "id": "DP-SVC-002",
+      "title": "SMS Executive"
+    },
+    {
+      "id": "DP-CONTENT-001",
+      "title": "SMS_DP$ Share"
+    },
+    {
+      "id": "DP-CONTENT-002",
+      "title": "SCCMContentLib$ Share"
+    },
+    {
+      "id": "DP-CONTENT-003",
+      "title": "Content Library Location"
+    },
+    {
+      "id": "DP-STORAGE-001",
+      "title": "Content Library Volume Free Space"
+    },
+    {
+      "id": "DP-STORAGE-002",
+      "title": "NO_SMS_ON_DRIVE.SMS Markers"
+    },
+    {
+      "id": "DP-CONFIG-001",
+      "title": "ConfigMgr DP Configuration"
+    }
+  ]
+}
