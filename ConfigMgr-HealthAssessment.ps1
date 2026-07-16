@@ -39,7 +39,7 @@ Add-Type -AssemblyName System.Drawing
 # runspace de background usado pela GUI (evita problemas de escopo de variavel entre
 # runspaces distintos).
 function Initialize-ScriptConfig {
-    $global:AppName    = "Avaliação de Saúde da Infraestrutura ConfigMgr"
+    $global:AppName    = "ConfigMgr Infrastructure Health Assessment"
     $global:AppVersion = "1.0.0"
 
     $global:Thresholds = [ordered]@{
@@ -76,11 +76,11 @@ function Initialize-ScriptConfig {
         "SMS Distribution Point"        = "DP"
         "SMS Management Point"          = "MP"
         "SMS Software Update Point"     = "SUP"
-        "SMS Site System"               = "Sistema de Site"
-        "SMS Site Server"               = "Servidor de Site"
+        "SMS Site System"               = "Site System"
+        "SMS Site Server"               = "Site Server"
         "SMS SQL Server"                = "SQL"
         "SMS Fallback Status Point"     = "FSP"
-        "SMS Reporting Point"           = "Relatórios"
+        "SMS Reporting Point"           = "Reporting"
         "SMS Endpoint Protection Point" = "EP"
         "SMS State Migration Point"     = "SMP"
     }
@@ -174,7 +174,7 @@ function Get-SiteSystemRoles {
             Select-Object ServerName, RoleName, SslState, NALPath
         return $roles
     } catch {
-        Write-Log "Falha ao consultar SMS_SystemResourceList: $($_.Exception.Message)" "ERROR"
+        Write-Log "Failed to query SMS_SystemResourceList: $($_.Exception.Message)" "ERROR"
         return @()
     }
 }
@@ -205,7 +205,7 @@ function Get-ContentDistributionErrors {
         }
         return $results
     } catch {
-        Write-Log "Falha ao consultar content distribution status: $($_.Exception.Message)" "ERROR"
+        Write-Log "Failed to query content distribution status: $($_.Exception.Message)" "ERROR"
         return @()
     }
 }
@@ -220,7 +220,7 @@ function Get-BoundariesWithoutGroup {
         $orphans = $boundaries | Where-Object { $memberIds -notcontains $_.BoundaryID }
         return $orphans | Select-Object BoundaryID, DisplayName, BoundaryType, Value
     } catch {
-        Write-Log "Falha ao consultar boundaries: $($_.Exception.Message)" "ERROR"
+        Write-Log "Failed to query boundaries: $($_.Exception.Message)" "ERROR"
         return @()
     }
 }
@@ -233,7 +233,7 @@ function Get-DevicesWithoutClient {
         Note      = ""
     }
     if (-not (Get-Module -ListAvailable -Name ActiveDirectory)) {
-        $result.Note = "Módulo ActiveDirectory (RSAT) não disponível nesta máquina; checagem pulada."
+        $result.Note = "ActiveDirectory module (RSAT) not available on this machine; check skipped."
         Write-Log $result.Note "WARN"
         return $result
     }
@@ -256,7 +256,7 @@ function Get-DevicesWithoutClient {
             Select-Object Name, @{n='LastLogon';e={$_.LastLogon.ToString("yyyy-MM-dd HH:mm")}}
         return $result
     } catch {
-        $result.Note = "Falha ao cruzar AD x SCCM: $($_.Exception.Message)"
+        $result.Note = "Failed to cross-reference AD and SCCM: $($_.Exception.Message)"
         Write-Log $result.Note "ERROR"
         return $result
     }
@@ -282,7 +282,7 @@ function Get-ClientHealthIssues {
 
         return $result
     } catch {
-        Write-Log "Falha ao consultar SMS_CombinedDeviceResources: $($_.Exception.Message)" "ERROR"
+        Write-Log "Failed to query SMS_CombinedDeviceResources: $($_.Exception.Message)" "ERROR"
         return $result
     }
 }
@@ -311,27 +311,27 @@ function Test-ServerConnectivity {
     # DNS
     try {
         $dns = [System.Net.Dns]::GetHostAddresses($ComputerName) | ForEach-Object { $_.IPAddressToString }
-        $findings += New-Finding -Check "Resolução de DNS" -Status "Healthy" -Value ($dns -join "; ") -FindingText "Resolução de DNS bem-sucedida."
+        $findings += New-Finding -Check "DNS Resolve" -Status "Healthy" -Value ($dns -join "; ") -FindingText "DNS resolution succeeded."
     } catch {
-        $findings += New-Finding -Check "Resolução de DNS" -Status "Critical" -Value "N/A" -FindingText "Falha na resolução de DNS." -Evidence $_.Exception.Message
+        $findings += New-Finding -Check "DNS Resolve" -Status "Critical" -Value "N/A" -FindingText "DNS resolution failed." -Evidence $_.Exception.Message
         return $findings, $false
     }
     # Ping
     try {
         $ping = Test-Connection -ComputerName $ComputerName -Count 3 -ErrorAction Stop
         $avg = [math]::Round(($ping | Measure-Object -Property ResponseTime -Average).Average,0)
-        $findings += New-Finding -Check "Ping" -Status "Healthy" -Value "Média=${avg}ms" -FindingText "Ping médio de $avg ms."
+        $findings += New-Finding -Check "Ping" -Status "Healthy" -Value "Avg=${avg}ms" -FindingText "Average ping $avg ms."
     } catch {
-        $findings += New-Finding -Check "Ping" -Status "Warning" -Value "Sem resposta" -FindingText "O host não respondeu ao ICMP (pode estar bloqueado por firewall)."
+        $findings += New-Finding -Check "Ping" -Status "Warning" -Value "No response" -FindingText "Host did not respond to ICMP (may be blocked by a firewall)."
     }
     # WinRM
     $winrmOk = $false
     try {
         $null = Test-WSMan -ComputerName $ComputerName -ErrorAction Stop
         $winrmOk = $true
-        $findings += New-Finding -Check "WinRM" -Status "Healthy" -Value "Disponível" -FindingText "WinRM disponível."
+        $findings += New-Finding -Check "WinRM" -Status "Healthy" -Value "Available" -FindingText "WinRM available."
     } catch {
-        $findings += New-Finding -Check "WinRM" -Status "Critical" -Value "Indisponível" -FindingText "WinRM indisponível; as checagens remotas (SO, disco, serviços, RAM/CPU, certificados) serão puladas." -Evidence $_.Exception.Message
+        $findings += New-Finding -Check "WinRM" -Status "Critical" -Value "Unavailable" -FindingText "WinRM unavailable; remote checks (OS, disk, services, RAM/CPU, certificates) will be skipped." -Evidence $_.Exception.Message
     }
     return $findings, $winrmOk
 }
@@ -341,7 +341,7 @@ function Get-ServerOSAndPerf {
     $findings = @()
     $cs = New-RemoteCimSession -ComputerName $ComputerName -Credential $Credential
     if (-not $cs) {
-        $findings += New-Finding -Check "Versão do SO" -Status "NotApplicable" -FindingText "Sem sessão remota (WinRM indisponível)."
+        $findings += New-Finding -Check "OS Version" -Status "NotApplicable" -FindingText "No remote session (WinRM unavailable)."
         return $findings
     }
     try {
@@ -350,18 +350,18 @@ function Get-ServerOSAndPerf {
         $csi = Get-CimInstance -CimSession $cs -ClassName Win32_ComputerSystem
 
         # OS Version
-        $findings += New-Finding -Check "Versão do SO" -Status "Info" -Value $os.Caption `
+        $findings += New-Finding -Check "OS Version" -Status "Info" -Value $os.Caption `
             -FindingText $os.Caption `
-            -Evidence "Versão=$($os.Version); Build=$($os.BuildNumber); Arquitetura=$($os.OSArchitecture)"
+            -Evidence "Version=$($os.Version); Build=$($os.BuildNumber); Architecture=$($os.OSArchitecture)"
 
         # Uptime
         $lastBoot = $os.LastBootUpTime
         $uptimeDays = [math]::Round(((Get-Date) - $lastBoot).TotalDays,1)
         $upStatus = "Healthy"
         if ($uptimeDays -ge $global:Thresholds.UptimeCriticalDays) { $upStatus = "Warning" }
-        $findings += New-Finding -Check "Tempo de Atividade (Uptime)" -Status $upStatus -Value "$uptimeDays dias" `
-            -FindingText "Última reinicialização: $($lastBoot.ToString('yyyy-MM-dd HH:mm')); Tempo ativo: $uptimeDays dias." `
-            -Evidence "UltimoBoot=$($lastBoot.ToString('yyyy-MM-dd HH:mm:ss'))"
+        $findings += New-Finding -Check "Uptime" -Status $upStatus -Value "$uptimeDays days" `
+            -FindingText "Last boot: $($lastBoot.ToString('yyyy-MM-dd HH:mm')); Uptime: $uptimeDays days." `
+            -Evidence "LastBoot=$($lastBoot.ToString('yyyy-MM-dd HH:mm:ss'))"
 
         # Memoria
         $totalMemGB = [math]::Round($csi.TotalPhysicalMemory/1GB,1)
@@ -370,10 +370,10 @@ function Get-ServerOSAndPerf {
         $memStatus = "Healthy"
         if ($usedPct -ge $global:Thresholds.MemPctCritical) { $memStatus = "Critical" }
         elseif ($usedPct -ge $global:Thresholds.MemPctWarning) { $memStatus = "Warning" }
-        $findings += New-Finding -Check "Memória RAM" -Status $memStatus -Value "$usedPct% usado ($totalMemGB GB total)" `
-            -FindingText "RAM: $freeMemGB GB livres de $totalMemGB GB ($usedPct% em uso)." `
-            -Evidence "Total=${totalMemGB}GB; Livre=${freeMemGB}GB; PctUso=$usedPct%" `
-            -Recommendation $(if ($memStatus -eq "Critical") { "Consumo de memória crítico; investigar processos e considerar aumento de RAM." } else { "" })
+        $findings += New-Finding -Check "Memory (RAM)" -Status $memStatus -Value "$usedPct% used ($totalMemGB GB total)" `
+            -FindingText "RAM: $freeMemGB GB free of $totalMemGB GB ($usedPct% in use)." `
+            -Evidence "Total=${totalMemGB}GB; Free=${freeMemGB}GB; UsedPct=$usedPct%" `
+            -Recommendation $(if ($memStatus -eq "Critical") { "Critical memory usage; investigate processes and consider increasing RAM." } else { "" })
 
         # CPU (media de 2 amostras rapidas)
         $load1 = ($cpu | Measure-Object -Property LoadPercentage -Average).Average
@@ -384,10 +384,10 @@ function Get-ServerOSAndPerf {
         $cpuStatus = "Healthy"
         if ($cpuAvg -ge $global:Thresholds.CpuPctCritical) { $cpuStatus = "Critical" }
         elseif ($cpuAvg -ge $global:Thresholds.CpuPctWarning) { $cpuStatus = "Warning" }
-        $findings += New-Finding -Check "Processamento (CPU)" -Status $cpuStatus -Value "$cpuAvg%" `
-            -FindingText "Uso médio de CPU no momento da coleta: $cpuAvg%." `
-            -Evidence "Amostras=$load1%, $load2%" `
-            -Recommendation $(if ($cpuStatus -eq "Critical") { "Uso de CPU crítico; investigar processos com alto consumo." } else { "" })
+        $findings += New-Finding -Check "CPU Usage" -Status $cpuStatus -Value "$cpuAvg%" `
+            -FindingText "Average CPU usage at collection time: $cpuAvg%." `
+            -Evidence "Samples=$load1%, $load2%" `
+            -Recommendation $(if ($cpuStatus -eq "Critical") { "Critical CPU usage; investigate high-consumption processes." } else { "" })
 
         # Patch
         try {
@@ -399,18 +399,18 @@ function Get-ServerOSAndPerf {
                 $patchStatus = "Healthy"
                 if ($daysSince -ge $global:Thresholds.PatchDaysCritical) { $patchStatus = "Critical" }
                 elseif ($daysSince -ge $global:Thresholds.PatchDaysWarning) { $patchStatus = "Warning" }
-                $findings += New-Finding -Check "Último Patch Instalado" -Status $patchStatus -Value "$($last.HotFixID) (há $daysSince dias)" `
-                    -FindingText "Última KB instalada: $($last.HotFixID) em $([datetime]$last.InstalledOn | Get-Date -Format 'yyyy-MM-dd')." `
-                    -Evidence "DiasDesdeUltimoPatch=$daysSince" `
-                    -Recommendation $(if ($patchStatus -ne "Healthy") { "Verificar o ciclo de patching / compliance de updates neste servidor." } else { "" })
+                $findings += New-Finding -Check "Last Installed Patch" -Status $patchStatus -Value "$($last.HotFixID) ($daysSince days ago)" `
+                    -FindingText "Last installed KB: $($last.HotFixID) on $([datetime]$last.InstalledOn | Get-Date -Format 'yyyy-MM-dd')." `
+                    -Evidence "DaysSinceLastPatch=$daysSince" `
+                    -Recommendation $(if ($patchStatus -ne "Healthy") { "Review the patching cycle / update compliance on this server." } else { "" })
             } else {
-                $findings += New-Finding -Check "Último Patch Instalado" -Status "Warning" -Value "Sem dados" -FindingText "Nenhuma KB encontrada via Win32_QuickFixEngineering."
+                $findings += New-Finding -Check "Last Installed Patch" -Status "Warning" -Value "No data" -FindingText "No KB found via Win32_QuickFixEngineering."
             }
         } catch {
-            $findings += New-Finding -Check "Último Patch Instalado" -Status "NotApplicable" -FindingText "Falha ao consultar hotfixes." -Evidence $_.Exception.Message
+            $findings += New-Finding -Check "Last Installed Patch" -Status "NotApplicable" -FindingText "Failed to query hotfixes." -Evidence $_.Exception.Message
         }
     } catch {
-        $findings += New-Finding -Check "Versão do SO" -Status "Critical" -FindingText "Falha ao coletar dados de SO/desempenho." -Evidence $_.Exception.Message
+        $findings += New-Finding -Check "OS Version" -Status "Critical" -FindingText "Failed to collect OS/performance data." -Evidence $_.Exception.Message
     } finally {
         Remove-CimSession -CimSession $cs -ErrorAction SilentlyContinue
     }
@@ -440,9 +440,9 @@ function Get-ServerDiskInfo {
             elseif ($freePct -le $global:Thresholds.DiskFreePctWarning) { $status = "Warning" }
             if ($totalGB -eq 0) { $status = "NotApplicable" }
 
-            $rec = "Nenhuma ação necessária."
-            if ($status -eq "Critical") { $rec = "Espaço em disco criticamente baixo; liberar espaço ou expandir o volume com urgência." }
-            elseif ($status -eq "Warning") { $rec = "Espaço em disco em atenção; planejar liberação/expansão." }
+            $rec = "No action required."
+            if ($status -eq "Critical") { $rec = "Disk space critically low; free up space or expand the volume urgently." }
+            elseif ($status -eq "Warning") { $rec = "Disk space warning; plan for cleanup/expansion." }
 
             $disks += [PSCustomObject]@{
                 Drive   = $v.DeviceID
@@ -455,7 +455,7 @@ function Get-ServerDiskInfo {
             }
         }
     } catch {
-        Write-Log "Falha ao coletar dados de disco de ${ComputerName}: $($_.Exception.Message)" "ERROR"
+        Write-Log "Failed to collect disk data from ${ComputerName}: $($_.Exception.Message)" "ERROR"
     } finally {
         Remove-CimSession -CimSession $cs -ErrorAction SilentlyContinue
     }
@@ -492,16 +492,16 @@ function Get-ServerPendingReboot {
         $r = Invoke-Command @params
 
         if ($r.Pendente) {
-            return New-Finding -Check "Reinicialização Pendente" -Status "Warning" -Value "Sim" `
-                -FindingText "Servidor com reinicialização pendente. Motivo(s): $($r.Motivos -join ', ')." `
-                -Recommendation "Agendar a reinicialização do servidor em janela de manutenção o quanto antes."
+            return New-Finding -Check "Pending Reboot" -Status "Warning" -Value "Yes" `
+                -FindingText "Server has a pending reboot. Reason(s): $($r.Motivos -join ', ')." `
+                -Recommendation "Schedule a server reboot during a maintenance window as soon as possible."
         } else {
-            return New-Finding -Check "Reinicialização Pendente" -Status "Healthy" -Value "Não" `
-                -FindingText "Nenhuma reinicialização pendente detectada."
+            return New-Finding -Check "Pending Reboot" -Status "Healthy" -Value "No" `
+                -FindingText "No pending reboot detected."
         }
     } catch {
-        return New-Finding -Check "Reinicialização Pendente" -Status "NotApplicable" `
-            -FindingText "Falha ao verificar reinicialização pendente (requer WinRM)." -Evidence $_.Exception.Message
+        return New-Finding -Check "Pending Reboot" -Status "NotApplicable" `
+            -FindingText "Failed to check pending reboot status (requires WinRM)." -Evidence $_.Exception.Message
     }
 }
 
@@ -511,7 +511,7 @@ function Get-ServerServiceHealth {
     $cs = New-RemoteCimSession -ComputerName $ComputerName -Credential $Credential
     if (-not $cs) {
         foreach ($svc in $ServiceNames) {
-            $findings += New-Finding -Check "Serviço: $svc" -Status "NotApplicable" -FindingText "Sem sessão remota."
+            $findings += New-Finding -Check "Service: $svc" -Status "NotApplicable" -FindingText "No remote session."
         }
         return $findings
     }
@@ -519,15 +519,15 @@ function Get-ServerServiceHealth {
         foreach ($svcName in $ServiceNames) {
             $svc = Get-CimInstance -CimSession $cs -ClassName Win32_Service -Filter "Name='$svcName'" -ErrorAction SilentlyContinue
             if (-not $svc) {
-                $findings += New-Finding -Check "Serviço: $svcName" -Status "NotApplicable" -Value "Não instalado" -FindingText "Serviço não encontrado neste servidor."
+                $findings += New-Finding -Check "Service: $svcName" -Status "NotApplicable" -Value "Not installed" -FindingText "Service not found on this server."
                 continue
             }
             $status = "Healthy"
             if ($svc.State -ne "Running") { $status = "Critical" }
             elseif ($svc.StartMode -eq "Disabled") { $status = "Warning" }
-            $findings += New-Finding -Check "Serviço: $svcName" -Status $status -Value "$($svc.State) / Inicialização=$($svc.StartMode)" `
-                -FindingText "O serviço $svcName está $($svc.State)." `
-                -Recommendation $(if ($status -eq "Critical") { "Serviço $svcName parado; iniciar e investigar o Visualizador de Eventos." } else { "" })
+            $findings += New-Finding -Check "Service: $svcName" -Status $status -Value "$($svc.State) / Start=$($svc.StartMode)" `
+                -FindingText "Service $svcName is $($svc.State)." `
+                -Recommendation $(if ($status -eq "Critical") { "Service $svcName is stopped; start it and investigate the Event Log." } else { "" })
         }
     } finally {
         Remove-CimSession -CimSession $cs -ErrorAction SilentlyContinue
@@ -568,17 +568,17 @@ function Get-IISCertHealth {
         $results = Invoke-Command @params
 
         if (-not $results -or ($results.Count -eq 1 -and $results[0].Error -and $results[0].NotAfter -eq $null -and $results[0].Binding -eq "(nenhum)")) {
-            $findings += New-Finding -Check "Certificado IIS" -Status "Info" -Value "Sem binding SSL" -FindingText "Nenhum binding HTTPS configurado no IIS."
+            $findings += New-Finding -Check "IIS Certificate" -Status "Info" -Value "No SSL binding" -FindingText "No HTTPS binding configured in IIS."
             return $findings
         }
 
         foreach ($r in $results) {
             if ($r.Error) {
-                $findings += New-Finding -Check "Certificado IIS" -Status "NotApplicable" -FindingText "Falha ao inspecionar certificados IIS." -Evidence $r.Error
+                $findings += New-Finding -Check "IIS Certificate" -Status "NotApplicable" -FindingText "Failed to inspect IIS certificates." -Evidence $r.Error
                 continue
             }
             if (-not $r.NotAfter) {
-                $findings += New-Finding -Check "Certificado IIS ($($r.Binding))" -Status "Warning" -Value "Não localizado" -FindingText "Certificado do binding $($r.Binding) não localizado no repositório local."
+                $findings += New-Finding -Check "IIS Certificate ($($r.Binding))" -Status "Warning" -Value "Not found" -FindingText "Certificate for binding $($r.Binding) not found in the local store."
                 continue
             }
             $daysLeft = [math]::Round(($r.NotAfter - (Get-Date)).TotalDays,0)
@@ -588,18 +588,18 @@ function Get-IISCertHealth {
             elseif ($daysLeft -le $global:Thresholds.CertExpiryWarningDays) { $status = "Warning" }
 
             $findingText = if ($daysLeft -le 0) {
-                "Certificado EXPIRADO há $([math]::Abs($daysLeft)) dia(s)."
+                "Certificate EXPIRED $([math]::Abs($daysLeft)) day(s) ago."
             } else {
-                "Certificado expira em $daysLeft dia(s) ($($r.NotAfter.ToString('yyyy-MM-dd')))."
+                "Certificate expires in $daysLeft day(s) ($($r.NotAfter.ToString('yyyy-MM-dd')))."
             }
-            $rec = if ($status -eq "Critical") { "Renovar/substituir o certificado com urgência." }
-                   elseif ($status -eq "Warning") { "Planejar a renovação do certificado." } else { "" }
+            $rec = if ($status -eq "Critical") { "Renew/replace the certificate urgently." }
+                   elseif ($status -eq "Warning") { "Plan for certificate renewal." } else { "" }
 
-            $findings += New-Finding -Check "Certificado IIS ($($r.Binding))" -Status $status -Value "$daysLeft dias restantes" `
+            $findings += New-Finding -Check "IIS Certificate ($($r.Binding))" -Status $status -Value "$daysLeft days remaining" `
                 -FindingText $findingText -Evidence "Subject=$($r.Subject); Thumbprint=$($r.Thumbprint)" -Recommendation $rec
         }
     } catch {
-        $findings += New-Finding -Check "Certificado IIS" -Status "NotApplicable" -FindingText "Falha ao conectar via WinRM para checar certificados IIS." -Evidence $_.Exception.Message
+        $findings += New-Finding -Check "IIS Certificate" -Status "NotApplicable" -FindingText "Failed to connect via WinRM to check IIS certificates." -Evidence $_.Exception.Message
     }
     return $findings
 }
@@ -623,15 +623,15 @@ function Get-WSUSHealth {
             if ($syncInfo.Result -ne "Succeeded") { $status = "Critical" }
             $hoursAgo = [math]::Round(((Get-Date) - $syncInfo.EndTime).TotalHours,1)
             if ($hoursAgo -gt 48 -and $status -eq "Healthy") { $status = "Warning" }
-            $findings += New-Finding -Check "WSUS - Última Sincronização" -Status $status `
-                -Value "$($syncInfo.Result) (há $hoursAgo h)" `
-                -FindingText "Resultado: $($syncInfo.Result); Término: $($syncInfo.EndTime)." `
-                -Recommendation $(if ($status -ne "Healthy") { "Verificar os logs de sincronização do WSUS (SoftwareDistribution.log / console do WSUS)." } else { "" })
+            $findings += New-Finding -Check "WSUS - Last Synchronization" -Status $status `
+                -Value "$($syncInfo.Result) ($hoursAgo h ago)" `
+                -FindingText "Result: $($syncInfo.Result); End: $($syncInfo.EndTime)." `
+                -Recommendation $(if ($status -ne "Healthy") { "Check the WSUS synchronization logs (SoftwareDistribution.log / WSUS console)." } else { "" })
         } else {
-            $findings += New-Finding -Check "WSUS - Última Sincronização" -Status "Info" -Value "N/D" -FindingText "Módulo UpdateServices (RSAT) não instalado na máquina que executa a ferramenta; não foi possível detalhar a sincronização."
+            $findings += New-Finding -Check "WSUS - Last Synchronization" -Status "Info" -Value "N/A" -FindingText "UpdateServices module (RSAT) not installed on the machine running this tool; sync details unavailable."
         }
     } catch {
-        $findings += New-Finding -Check "WSUS - Última Sincronização" -Status "Warning" -FindingText "Falha ao consultar o status de sincronização do WSUS." -Evidence $_.Exception.Message
+        $findings += New-Finding -Check "WSUS - Last Synchronization" -Status "Warning" -FindingText "Failed to query WSUS synchronization status." -Evidence $_.Exception.Message
     }
 
     return $findings
@@ -644,11 +644,11 @@ function Get-WSUSHealth {
 function Get-StatusDotHtml {
     param([string]$Status)
     $map = @{
-        "Healthy"       = @{ color="#22c55e"; label="Saudável" }
-        "Warning"       = @{ color="#f59e0b"; label="Atenção" }
-        "Critical"      = @{ color="#ef4444"; label="Crítico" }
-        "Info"          = @{ color="#3b82f6"; label="Informação" }
-        "NotApplicable" = @{ color="#9ca3af"; label="Não Aplicável" }
+        "Healthy"       = @{ color="#22c55e"; label="Healthy" }
+        "Warning"       = @{ color="#f59e0b"; label="Warning" }
+        "Critical"      = @{ color="#ef4444"; label="Critical" }
+        "Info"          = @{ color="#3b82f6"; label="Info" }
+        "NotApplicable" = @{ color="#9ca3af"; label="Not Applicable" }
     }
     $s = $map[$Status]
     if (-not $s) { $s = $map["Info"] }
@@ -658,11 +658,11 @@ function Get-StatusDotHtml {
 function ConvertTo-FindingsTableHtml {
     param([array]$Findings, [switch]$WithRecommendation)
     if (-not $Findings -or $Findings.Count -eq 0) {
-        return "<p class='empty-note'>Nenhum dado coletado para esta seção.</p>"
+        return "<p class='empty-note'>No data collected for this section.</p>"
     }
     $sb = New-Object System.Text.StringBuilder
-    [void]$sb.Append("<table class='data-table'><thead><tr><th>Verificação</th><th>Status</th><th>Valor</th><th>Constatação</th><th>Evidência</th>")
-    if ($WithRecommendation) { [void]$sb.Append("<th>Recomendação</th>") }
+    [void]$sb.Append("<table class='data-table'><thead><tr><th>Check</th><th>Status</th><th>Value</th><th>Finding</th><th>Evidence</th>")
+    if ($WithRecommendation) { [void]$sb.Append("<th>Recommendation</th>") }
     [void]$sb.Append("</tr></thead><tbody>")
     foreach ($f in $Findings) {
         [void]$sb.Append("<tr class='row-$($f.Status)'>")
@@ -693,15 +693,15 @@ function Invoke-Assessment {
 
     Add-Type -AssemblyName System.Web
 
-    Write-Log "Conectando ao SMS Provider em $SiteServer (site $SiteCode)..."
+    Write-Log "Connecting to the SMS Provider on $SiteServer (site $SiteCode)..."
     $roles = Get-SiteSystemRoles -SiteCode $SiteCode -SiteServer $SiteServer
     if (-not $roles -or $roles.Count -eq 0) {
-        Write-Log "Nenhum papel de sistema de site encontrado. Verifique o Código do Site / Servidor do Site / permissões." "ERROR"
-        throw "Não foi possível obter os papéis de sistema de site. Verifique o Código do Site, o Servidor do Site e suas permissões no SMS Provider."
+        Write-Log "No site system roles found. Check the Site Code / Site Server / permissions." "ERROR"
+        throw "Could not retrieve site system roles. Please check the Site Code, Site Server, and your SMS Provider permissions."
     }
 
     $serverGroups = $roles | Group-Object ServerName
-    Write-Log "Encontrados $($serverGroups.Count) servidores de sistema de site com $($roles.Count) instâncias de papel."
+    Write-Log "Found $($serverGroups.Count) site system servers with $($roles.Count) role instances."
 
     $serverData = @()
     $i = 0
@@ -709,7 +709,7 @@ function Invoke-Assessment {
         $i++
         $serverName = $grp.Name
         $serverRoles = $grp.Group | Select-Object -ExpandProperty RoleName -Unique
-        Write-Log "[$i/$($serverGroups.Count)] Coletando dados de $serverName ($($serverRoles -join ', '))..."
+        Write-Log "[$i/$($serverGroups.Count)] Collecting data from $serverName ($($serverRoles -join ', '))..."
 
         $connFindings, $winrmOk = Test-ServerConnectivity -ComputerName $serverName
 
@@ -743,12 +743,12 @@ function Invoke-Assessment {
                 $iisCertFindings = Get-IISCertHealth -ComputerName $serverName -Credential $Credential
             }
         } else {
-            $osFindings += New-Finding -Check "Versão do SO" -Status "NotApplicable" -FindingText "WinRM indisponível."
+            $osFindings += New-Finding -Check "OS Version" -Status "NotApplicable" -FindingText "WinRM unavailable."
         }
 
         $wsusFindings = @()
         if ($serverRoles -contains "SMS Software Update Point") {
-            Write-Log "  Verificando saúde do WSUS/SUP em $serverName..."
+            Write-Log "  Checking WSUS/SUP health on $serverName..."
             $wsusFindings = Get-WSUSHealth -ComputerName $serverName -Credential $Credential
         }
 
@@ -764,7 +764,7 @@ function Invoke-Assessment {
 
         # Status agregado por secao
         $overviewStatus = Get-WorstStatus -Statuses ($connFindings.Status)
-        $osStatus       = Get-WorstStatus -Statuses ($osFindings | Where-Object {$_.Check -ne 'Versão do SO'} | Select-Object -ExpandProperty Status)
+        $osStatus       = Get-WorstStatus -Statuses ($osFindings | Where-Object {$_.Check -ne 'OS Version'} | Select-Object -ExpandProperty Status)
         $storageStatus  = Get-WorstStatus -Statuses ($disks.Status)
         $svcStatus      = Get-WorstStatus -Statuses (($svcFindings + $iisCertFindings + $wsusFindings).Status)
         $dpStatus       = if ($serverRoles -contains "SMS Distribution Point") {
@@ -794,24 +794,24 @@ function Invoke-Assessment {
         }
     }
 
-    Write-Log "Coletando limites (boundaries) sem grupo..."
+    Write-Log "Collecting boundaries without a group..."
     $orphanBoundaries = Get-BoundariesWithoutGroup -SiteCode $SiteCode -SiteServer $SiteServer
 
-    Write-Log "Coletando erros de distribuição de conteúdo (global)..."
+    Write-Log "Collecting content distribution errors (global)..."
     if ($null -eq $global:GlobalContentErrors) {
         $global:GlobalContentErrors = Get-ContentDistributionErrors -SiteCode $SiteCode -SiteServer $SiteServer
     }
 
-    Write-Log "Coletando saúde de clientes (inativos / falha na verificação)..."
+    Write-Log "Collecting client health (inactive / check failed)..."
     $clientHealth = Get-ClientHealthIssues -SiteCode $SiteCode -SiteServer $SiteServer
 
     $devicesWithoutClient = [PSCustomObject]@{ Available=$false; Devices=@(); Note="Checagem desabilitada." }
     if ($CheckAD) {
-        Write-Log "Cruzando Active Directory x clientes SCCM (dispositivos sem cliente)..."
+        Write-Log "Cross-referencing Active Directory with SCCM clients (devices without client)..."
         $devicesWithoutClient = Get-DevicesWithoutClient -SiteCode $SiteCode -SiteServer $SiteServer -DaysBack $global:Thresholds.ADLogonDays
     }
 
-    Write-Log "Gerando relatório HTML..."
+    Write-Log "Generating HTML report..."
     $reportData = [PSCustomObject]@{
         SiteCode              = $SiteCode
         SiteServer            = $SiteServer
@@ -824,7 +824,7 @@ function Invoke-Assessment {
     }
 
     $reportFile = Build-HtmlReport -Data $reportData -OutputPath $OutputPath
-    Write-Log "Relatório gerado em: $reportFile"
+    Write-Log "Report generated at: $reportFile"
     return $reportFile
 }
 
@@ -947,12 +947,12 @@ function Build-ServerCardHtml {
     $overviewHtml = ConvertTo-FindingsTableHtml -Findings $Server.ConnFindings
 
     # ---- OS tab ----
-    $osOnly    = $Server.OSFindings | Where-Object { $_.Check -in @('Versão do SO','Tempo de Atividade (Uptime)','Reinicialização Pendente') }
-    $patchOnly = $Server.OSFindings | Where-Object { $_.Check -eq 'Último Patch Instalado' }
-    $perfOnly  = $Server.OSFindings | Where-Object { $_.Check -in @('Memória RAM','Processamento (CPU)') }
-    $osHtml  = "<div class='subheading'>Sistema Operacional</div>" + (ConvertTo-FindingsTableHtml -Findings $osOnly -WithRecommendation)
-    $osHtml += "<div class='subheading'>Desempenho</div>" + (ConvertTo-FindingsTableHtml -Findings $perfOnly -WithRecommendation)
-    $osHtml += "<div class='subheading'>Evidências de Patch</div>" + (ConvertTo-FindingsTableHtml -Findings $patchOnly -WithRecommendation)
+    $osOnly    = $Server.OSFindings | Where-Object { $_.Check -in @('OS Version','Uptime','Pending Reboot') }
+    $patchOnly = $Server.OSFindings | Where-Object { $_.Check -eq 'Last Installed Patch' }
+    $perfOnly  = $Server.OSFindings | Where-Object { $_.Check -in @('Memory (RAM)','CPU Usage') }
+    $osHtml  = "<div class='subheading'>Operating System</div>" + (ConvertTo-FindingsTableHtml -Findings $osOnly -WithRecommendation)
+    $osHtml += "<div class='subheading'>Performance</div>" + (ConvertTo-FindingsTableHtml -Findings $perfOnly -WithRecommendation)
+    $osHtml += "<div class='subheading'>Patch Evidence</div>" + (ConvertTo-FindingsTableHtml -Findings $patchOnly -WithRecommendation)
 
     # ---- Storage tab ----
     $storageCardsHtml = "<div class='storage-grid'>"
@@ -960,24 +960,24 @@ function Build-ServerCardHtml {
         $barColor = switch ($d.Status) { "Critical" {"var(--red)"} "Warning" {"var(--amber)"} default {"var(--green)"} }
         $storageCardsHtml += @"
 <div class='disk-card $($d.Status)'>
-  <div class='dtop'><span>Disco $($d.Drive)</span>$(Get-StatusDotHtml $d.Status)</div>
+  <div class='dtop'><span>Disk $($d.Drive)</span>$(Get-StatusDotHtml $d.Status)</div>
   <div class='bar-bg'><div class='bar-fill' style='width:$($d.FreePct)%;background:$barColor;'></div></div>
-  <div class='disk-note'>Livre: $($d.FreeGB) GB ($($d.FreePct)%) / Total: $($d.TotalGB) GB</div>
+  <div class='disk-note'>Free: $($d.FreeGB) GB ($($d.FreePct)%) / Total: $($d.TotalGB) GB</div>
 </div>
 "@
     }
     $storageCardsHtml += "</div>"
     $diskFindings = $Server.Disks | ForEach-Object {
-        New-Finding -Check "Disco $($_.Drive)" -Status $_.Status -Value "Total=$($_.TotalGB) GB; Usado=$($_.UsedGB) GB; Livre=$($_.FreeGB) GB; PctLivre=$($_.FreePct)%" `
-            -FindingText "A unidade $($_.Drive) tem $($_.FreeGB) GB livres de $($_.TotalGB) GB ($($_.FreePct)% livre)." `
+        New-Finding -Check "Disk $($_.Drive)" -Status $_.Status -Value "Total=$($_.TotalGB) GB; Used=$($_.UsedGB) GB; Free=$($_.FreeGB) GB; FreePct=$($_.FreePct)%" `
+            -FindingText "Drive $($_.Drive) has $($_.FreeGB) GB free of $($_.TotalGB) GB ($($_.FreePct)% free)." `
             -Recommendation $_.Recommendation
     }
-    $storageHtml = $storageCardsHtml + "<div class='subheading'>Detalhes de Armazenamento</div>" + (ConvertTo-FindingsTableHtml -Findings $diskFindings -WithRecommendation)
+    $storageHtml = $storageCardsHtml + "<div class='subheading'>Storage Details</div>" + (ConvertTo-FindingsTableHtml -Findings $diskFindings -WithRecommendation)
 
     # ---- Services tab ----
-    $servicesHtml  = "<div class='subheading'>Serviços</div>" + (ConvertTo-FindingsTableHtml -Findings $Server.ServiceFindings -WithRecommendation)
+    $servicesHtml  = "<div class='subheading'>Services</div>" + (ConvertTo-FindingsTableHtml -Findings $Server.ServiceFindings -WithRecommendation)
     if ($Server.IISCertFindings.Count -gt 0) {
-        $servicesHtml += "<div class='subheading'>Certificados IIS</div>" + (ConvertTo-FindingsTableHtml -Findings $Server.IISCertFindings -WithRecommendation)
+        $servicesHtml += "<div class='subheading'>IIS Certificates</div>" + (ConvertTo-FindingsTableHtml -Findings $Server.IISCertFindings -WithRecommendation)
     }
     if ($Server.WSUSFindings.Count -gt 0) {
         $servicesHtml += "<div class='subheading'>WSUS / SUP</div>" + (ConvertTo-FindingsTableHtml -Findings $Server.WSUSFindings -WithRecommendation)
@@ -989,25 +989,25 @@ function Build-ServerCardHtml {
     if ($hasDP) {
         if ($Server.DPContentErrors.Count -gt 0) {
             $dpFindings = $Server.DPContentErrors | ForEach-Object {
-                New-Finding -Check "Conteúdo: $($_.PackageName)" -Status "Critical" -Value $_.State `
-                    -FindingText "Pacote $($_.PackageName) em estado '$($_.State)' neste Ponto de Distribuição." `
-                    -Evidence "UltimaAtualizacao=$($_.LastUpdate)" -Recommendation "Redistribuir o conteúdo e validar a content library / conectividade do DP."
+                New-Finding -Check "Content: $($_.PackageName)" -Status "Critical" -Value $_.State `
+                    -FindingText "Package $($_.PackageName) is in state '$($_.State)' on this Distribution Point." `
+                    -Evidence "LastUpdate=$($_.LastUpdate)" -Recommendation "Redistribute the content and validate the content library / DP connectivity."
             }
-            $dpHtml = "<div class='subheading'>Distribuição de Conteúdo - Erros</div>" + (ConvertTo-FindingsTableHtml -Findings $dpFindings -WithRecommendation)
+            $dpHtml = "<div class='subheading'>Content Distribution - Errors</div>" + (ConvertTo-FindingsTableHtml -Findings $dpFindings -WithRecommendation)
         } else {
-            $dpHtml = "<p class='empty-note'>Nenhum erro de distribuição de conteúdo encontrado para este Ponto de Distribuição.</p>"
+            $dpHtml = "<p class='empty-note'>No content distribution errors found for this Distribution Point.</p>"
         }
     }
 
     # ---- Tabs (com destaque vermelho/amarelo se a secao tiver problema) ----
     $tabDef = @(
-        @{ key="overview"; label="Visão Geral"; status=$Server.SectionStatus.Overview; html=$overviewHtml },
-        @{ key="os";       label="Sistema Operacional"; status=$Server.SectionStatus.OS; html=$osHtml },
-        @{ key="storage";  label="Armazenamento"; status=$Server.SectionStatus.Storage; html=$storageHtml },
-        @{ key="services"; label="Serviços"; status=$Server.SectionStatus.Services; html=$servicesHtml }
+        @{ key="overview"; label="Overview"; status=$Server.SectionStatus.Overview; html=$overviewHtml },
+        @{ key="os";       label="Operating System"; status=$Server.SectionStatus.OS; html=$osHtml },
+        @{ key="storage";  label="Storage"; status=$Server.SectionStatus.Storage; html=$storageHtml },
+        @{ key="services"; label="Services"; status=$Server.SectionStatus.Services; html=$servicesHtml }
     )
     if ($hasDP) {
-        $tabDef += @{ key="dp"; label="Ponto de Distribuição"; status=$Server.SectionStatus.DP; html=$dpHtml }
+        $tabDef += @{ key="dp"; label="Distribution Point"; status=$Server.SectionStatus.DP; html=$dpHtml }
     }
 
     $tabsBtnHtml = ""
@@ -1057,55 +1057,55 @@ function Build-HtmlReport {
     $serverCardsHtml = ($Data.Servers | Sort-Object @{Expression={$global:StatusRank[$_.OverallStatus]}; Descending=$true}, ServerName |
         ForEach-Object { Build-ServerCardHtml -Server $_ }) -join "`n"
 
-    # ---- Boundaries sem grupo ----
+    # ---- Boundaries without group ----
     $boundaryFindings = $Data.OrphanBoundaries | ForEach-Object {
-        New-Finding -Check "Limite: $($_.DisplayName)" -Status "Warning" -Value $_.Value `
-            -FindingText "O limite '$($_.DisplayName)' (tipo $($_.BoundaryType)) não pertence a nenhum grupo de limites." `
-            -Recommendation "Associar a um grupo de limites (boundary group) para garantir a atribuição de site e a localização de conteúdo."
+        New-Finding -Check "Boundary: $($_.DisplayName)" -Status "Warning" -Value $_.Value `
+            -FindingText "Boundary '$($_.DisplayName)' (type $($_.BoundaryType)) does not belong to any boundary group." `
+            -Recommendation "Associate it with a boundary group to ensure proper site assignment and content location."
     }
     $boundariesHtml = if ($boundaryFindings.Count -gt 0) {
         ConvertTo-FindingsTableHtml -Findings $boundaryFindings -WithRecommendation
-    } else { "<p class='empty-note'>Todos os limites estão associados a pelo menos um grupo de limites.</p>" }
+    } else { "<p class='empty-note'>All boundaries are associated with at least one boundary group.</p>" }
 
-    # ---- Content distribution (somente erros, global) ----
+    # ---- Content distribution (errors only, global) ----
     $contentFindings = $Data.ContentErrors | ForEach-Object {
         New-Finding -Check "$($_.PackageName) -> $($_.Server)" -Status "Critical" -Value $_.State `
-            -FindingText "Falha de distribuição: $($_.State)." -Evidence "UltimaAtualizacao=$($_.LastUpdate)" `
-            -Recommendation "Redistribuir o conteúdo; validar a content library e a conectividade do Ponto de Distribuição."
+            -FindingText "Distribution failure: $($_.State)." -Evidence "LastUpdate=$($_.LastUpdate)" `
+            -Recommendation "Redistribute the content; validate the content library and Distribution Point connectivity."
     }
     $contentHtml = if ($contentFindings.Count -gt 0) {
         ConvertTo-FindingsTableHtml -Findings $contentFindings -WithRecommendation
-    } else { "<p class='empty-note'>Nenhum erro de distribuição de conteúdo encontrado em nenhum Ponto de Distribuição.</p>" }
+    } else { "<p class='empty-note'>No content distribution errors found on any Distribution Point.</p>" }
 
-    # ---- Clientes inativos / client check failed ----
+    # ---- Inactive clients / client check failed ----
     $inactiveFindings = $Data.ClientHealth.Inactive | ForEach-Object {
         New-Finding -Check $_.Name -Status "Warning" -Value $_.ClientStateDescription `
-            -FindingText "Cliente inativo. Última atividade: $($_.LastActiveTime)."
+            -FindingText "Inactive client. Last activity: $($_.LastActiveTime)."
     }
     $inactiveHtml = if ($inactiveFindings.Count -gt 0) {
         ConvertTo-FindingsTableHtml -Findings $inactiveFindings
-    } else { "<p class='empty-note'>Nenhum cliente inativo encontrado.</p>" }
+    } else { "<p class='empty-note'>No inactive clients found.</p>" }
 
     $ccfFindings = $Data.ClientHealth.ClientCheckFailed | ForEach-Object {
         New-Finding -Check $_.Name -Status "Critical" -Value $_.ClientStateDescription `
-            -FindingText "A verificação do cliente (Client Check) falhou. Última atividade: $($_.LastActiveTime)."
+            -FindingText "Client Check failed. Last activity: $($_.LastActiveTime)."
     }
     $ccfHtml = if ($ccfFindings.Count -gt 0) {
         ConvertTo-FindingsTableHtml -Findings $ccfFindings
-    } else { "<p class='empty-note'>Nenhum dispositivo com falha na verificação do cliente.</p>" }
+    } else { "<p class='empty-note'>No devices with failed client check.</p>" }
 
-    # ---- Devices sem cliente (AD x SCCM) ----
+    # ---- Devices without client (AD x SCCM) ----
     $dwcHtml = ""
     if (-not $Data.DevicesWithoutClient.Available) {
         $dwcHtml = "<p class='empty-note'>$([System.Web.HttpUtility]::HtmlEncode($Data.DevicesWithoutClient.Note))</p>"
     } else {
         $dwcFindings = $Data.DevicesWithoutClient.Devices | ForEach-Object {
             New-Finding -Check $_.Name -Status "Warning" -Value $_.LastLogon `
-                -FindingText "O computador fez logon no domínio nos últimos $($global:Thresholds.ADLogonDays) dias, mas não possui um cliente SCCM ativo."
+                -FindingText "The computer logged on to the domain in the last $($global:Thresholds.ADLogonDays) days but does not have an active SCCM client."
         }
         $dwcHtml = if ($dwcFindings.Count -gt 0) {
             ConvertTo-FindingsTableHtml -Findings $dwcFindings
-        } else { "<p class='empty-note'>Nenhum dispositivo com logon recente no AD sem cliente SCCM.</p>" }
+        } else { "<p class='empty-note'>No devices with recent AD logon lacking an SCCM client.</p>" }
     }
 
     $css = Get-CssBlock
@@ -1113,69 +1113,69 @@ function Build-HtmlReport {
 
     $html = @"
 <!DOCTYPE html>
-<html lang="pt-BR">
+<html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Avaliação de Saúde ConfigMgr - $($Data.SiteCode)</title>
+<title>ConfigMgr Health Assessment - $($Data.SiteCode)</title>
 <style>$css</style>
 </head>
 <body>
   <div class="header">
-    <h1>Avaliação de Saúde da Infraestrutura ConfigMgr</h1>
-    <div class="meta">Site: $($Data.SiteCode) | Servidor do Site: $($Data.SiteServer) | Versão $($global:AppVersion) | ID da Avaliação: $assessmentId | Gerado em: $generated</div>
+    <h1>ConfigMgr Infrastructure Health Assessment</h1>
+    <div class="meta">Site: $($Data.SiteCode) | Site Server: $($Data.SiteServer) | Version $($global:AppVersion) | Assessment ID: $assessmentId | Generated: $generated</div>
   </div>
   <div class="layout">
     <div class="sidebar">
       <div class="panel">
-        <h3>Filtros</h3>
-        <input type="text" id="searchServer" placeholder="Buscar servidor...">
+        <h3>Filters</h3>
+        <input type="text" id="searchServer" placeholder="Search server...">
         <select id="statusFilter">
-          <option value="all">Todos os status</option>
-          <option value="Critical">Crítico</option>
-          <option value="Warning">Atenção</option>
-          <option value="Healthy">Saudável</option>
+          <option value="all">All statuses</option>
+          <option value="Critical">Critical</option>
+          <option value="Warning">Warning</option>
+          <option value="Healthy">Healthy</option>
         </select>
-        <input type="text" id="roleFilter" placeholder="Filtrar por papel (DP, MP, SUP...)">
+        <input type="text" id="roleFilter" placeholder="Filter by role badge...">
       </div>
       <div class="panel">
-        <h3>Ambiente</h3>
+        <h3>Environment</h3>
         <div class="env-row"><span>Site</span><b>$($Data.SiteCode)</b></div>
-        <div class="env-row"><span>Servidores</span><b>$totalServers</b></div>
-        <div class="env-row"><span>Instâncias de Papel</span><b>$totalRoleInstances</b></div>
-        <div class="env-row"><span>Servidores Críticos</span><b style="color:var(--red)">$criticalServers</b></div>
-        <div class="env-row"><span>Servidores em Atenção</span><b style="color:var(--amber)">$warningServers</b></div>
+        <div class="env-row"><span>Servers</span><b>$totalServers</b></div>
+        <div class="env-row"><span>Role Instances</span><b>$totalRoleInstances</b></div>
+        <div class="env-row"><span>Critical Servers</span><b style="color:var(--red)">$criticalServers</b></div>
+        <div class="env-row"><span>Warning Servers</span><b style="color:var(--amber)">$warningServers</b></div>
       </div>
     </div>
     <div class="main">
       <div class="summary-cards">
-        <div class="summary-card"><div class="num">$totalServers</div><div class="lbl">Servidores</div></div>
-        <div class="summary-card"><div class="num" style="color:var(--red)">$criticalServers</div><div class="lbl">Crítico</div></div>
-        <div class="summary-card"><div class="num" style="color:var(--amber)">$warningServers</div><div class="lbl">Atenção</div></div>
-        <div class="summary-card"><div class="num" style="color:var(--red)">$($contentFindings.Count)</div><div class="lbl">Erros de Distribuição</div></div>
-        <div class="summary-card"><div class="num" style="color:var(--amber)">$($boundaryFindings.Count)</div><div class="lbl">Limites sem Grupo</div></div>
-        <div class="summary-card"><div class="num" style="color:var(--red)">$($ccfFindings.Count)</div><div class="lbl">Falha Verificação Cliente</div></div>
+        <div class="summary-card"><div class="num">$totalServers</div><div class="lbl">Servers</div></div>
+        <div class="summary-card"><div class="num" style="color:var(--red)">$criticalServers</div><div class="lbl">Critical</div></div>
+        <div class="summary-card"><div class="num" style="color:var(--amber)">$warningServers</div><div class="lbl">Warning</div></div>
+        <div class="summary-card"><div class="num" style="color:var(--red)">$($contentFindings.Count)</div><div class="lbl">Distribution Errors</div></div>
+        <div class="summary-card"><div class="num" style="color:var(--amber)">$($boundaryFindings.Count)</div><div class="lbl">Boundaries w/o Group</div></div>
+        <div class="summary-card"><div class="num" style="color:var(--red)">$($ccfFindings.Count)</div><div class="lbl">Client Check Failed</div></div>
       </div>
 
-      <div class="section-title">Servidores de Sistema de Site</div>
+      <div class="section-title">Site System Servers</div>
       $serverCardsHtml
 
-      <div class="section-title">Status de Distribuição de Conteúdo (somente erros)</div>
+      <div class="section-title">Content Distribution Status (errors only)</div>
       <div class="card"><div class="card-body">$contentHtml</div></div>
 
-      <div class="section-title">Limites sem Grupo de Limites (Boundaries sem Boundary Group)</div>
+      <div class="section-title">Boundaries without Boundary Group</div>
       <div class="card"><div class="card-body">$boundariesHtml</div></div>
 
-      <div class="section-title">Dispositivos sem Cliente SCCM (logon no AD nos últimos $($global:Thresholds.ADLogonDays) dias)</div>
+      <div class="section-title">Devices without SCCM Client (AD logon in the last $($global:Thresholds.ADLogonDays) days)</div>
       <div class="card"><div class="card-body">$dwcHtml</div></div>
 
-      <div class="section-title">Clientes Inativos</div>
+      <div class="section-title">Inactive Clients</div>
       <div class="card"><div class="card-body">$inactiveHtml</div></div>
 
-      <div class="section-title">Falha na Verificação do Cliente (Client Check Failed)</div>
+      <div class="section-title">Client Check Failed</div>
       <div class="card"><div class="card-body">$ccfHtml</div></div>
     </div>
   </div>
-  <div class="footer">Gerado por $($global:AppName) v$($global:AppVersion) | $generated</div>
+  <div class="footer">Generated by $($global:AppName) v$($global:AppVersion) | $generated</div>
   <script>$js</script>
 </body>
 </html>
@@ -1205,7 +1205,7 @@ function Show-MainForm {
     $y = 20
 
     $lblSite = New-Object System.Windows.Forms.Label
-    $lblSite.Text = "Código do Site:"
+    $lblSite.Text = "Site Code:"
     $lblSite.AutoSize = $true
     $lblSite.Location = New-Object System.Drawing.Point(20,$y)
     $form.Controls.Add($lblSite)
@@ -1218,7 +1218,7 @@ function Show-MainForm {
 
     $y += 34
     $lblServer = New-Object System.Windows.Forms.Label
-    $lblServer.Text = "Servidor do Site Primário:"
+    $lblServer.Text = "Primary Site Server:"
     $lblServer.AutoSize = $true
     $lblServer.Location = New-Object System.Drawing.Point(20,$y)
     $form.Controls.Add($lblServer)
@@ -1230,14 +1230,14 @@ function Show-MainForm {
 
     $y += 40
     $chkAlt = New-Object System.Windows.Forms.CheckBox
-    $chkAlt.Text = "Usar credenciais alternativas para acesso remoto aos servidores"
+    $chkAlt.Text = "Use alternate credentials for remote access to servers"
     $chkAlt.AutoSize = $true
     $chkAlt.Location = New-Object System.Drawing.Point(20,$y)
     $form.Controls.Add($chkAlt)
 
     $y += 30
     $chkAD = New-Object System.Windows.Forms.CheckBox
-    $chkAD.Text = "Verificar dispositivos sem cliente (cruzamento com Active Directory, últimos $($global:Thresholds.ADLogonDays) dias)"
+    $chkAD.Text = "Check devices without client (Active Directory cross-check, last $($global:Thresholds.ADLogonDays) days)"
     $chkAD.Checked = $true
     $chkAD.AutoSize = $true
     $chkAD.Location = New-Object System.Drawing.Point(20,$y)
@@ -1245,7 +1245,7 @@ function Show-MainForm {
 
     $y += 36
     $lblOut = New-Object System.Windows.Forms.Label
-    $lblOut.Text = "Salvar relatório em:"
+    $lblOut.Text = "Save report to:"
     $lblOut.AutoSize = $true
     $lblOut.Location = New-Object System.Drawing.Point(20,$y)
     $form.Controls.Add($lblOut)
@@ -1263,7 +1263,7 @@ function Show-MainForm {
     $btnBrowse.Size = New-Object System.Drawing.Size(32,24)
     $btnBrowse.Add_Click({
         $dlg = New-Object System.Windows.Forms.SaveFileDialog
-        $dlg.Filter = "Arquivo HTML (*.html)|*.html"
+        $dlg.Filter = "HTML File (*.html)|*.html"
         $dlg.FileName = [System.IO.Path]::GetFileName($txtOut.Text)
         if ($dlg.ShowDialog() -eq "OK") { $txtOut.Text = $dlg.FileName }
     })
@@ -1271,7 +1271,7 @@ function Show-MainForm {
 
     $y += 44
     $btnRun = New-Object System.Windows.Forms.Button
-    $btnRun.Text = "Executar Avaliação"
+    $btnRun.Text = "Run Assessment"
     $btnRun.AutoSize = $true
     $btnRun.Padding = New-Object System.Windows.Forms.Padding(14,6,14,6)
     $btnRun.Location = New-Object System.Drawing.Point(20,$y)
@@ -1280,7 +1280,7 @@ function Show-MainForm {
     $form.Controls.Add($btnRun)
 
     $btnOpen = New-Object System.Windows.Forms.Button
-    $btnOpen.Text = "Abrir Relatório"
+    $btnOpen.Text = "Open Report"
     $btnOpen.AutoSize = $true
     $btnOpen.Padding = New-Object System.Windows.Forms.Padding(14,6,14,6)
     $btnOpen.Location = New-Object System.Drawing.Point(210,$y)
@@ -1296,7 +1296,7 @@ function Show-MainForm {
 
     $y += 70
     $lblLog = New-Object System.Windows.Forms.Label
-    $lblLog.Text = "Log de execução:"
+    $lblLog.Text = "Execution log:"
     $lblLog.AutoSize = $true
     $lblLog.Location = New-Object System.Drawing.Point(20,$y)
     $form.Controls.Add($lblLog)
@@ -1335,22 +1335,22 @@ function Show-MainForm {
             $progress.MarqueeAnimationSpeed = 0
             $btnRun.Enabled = $true
             if ($global:SyncHash.Error) {
-                [System.Windows.Forms.MessageBox]::Show("Erro durante a avaliação:`n`n$($global:SyncHash.Error)","Erro",[System.Windows.Forms.MessageBoxButtons]::OK,[System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+                [System.Windows.Forms.MessageBox]::Show("Error during assessment:`n`n$($global:SyncHash.Error)","Error",[System.Windows.Forms.MessageBoxButtons]::OK,[System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
             } else {
                 $btnOpen.Enabled = $true
-                [System.Windows.Forms.MessageBox]::Show("Avaliação concluída com sucesso!`n`nRelatório: $($global:SyncHash.ReportPath)","Concluído",[System.Windows.Forms.MessageBoxButtons]::OK,[System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+                [System.Windows.Forms.MessageBox]::Show("Assessment completed successfully!`n`nReport: $($global:SyncHash.ReportPath)","Completed",[System.Windows.Forms.MessageBoxButtons]::OK,[System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
             }
         }
     })
 
     $btnRun.Add_Click({
         if ([string]::IsNullOrWhiteSpace($txtSiteCode.Text) -or [string]::IsNullOrWhiteSpace($txtSiteServer.Text)) {
-            [System.Windows.Forms.MessageBox]::Show("Informe o Código do Site e o Servidor do Site Primário.","Campos obrigatórios",[System.Windows.Forms.MessageBoxButtons]::OK,[System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+            [System.Windows.Forms.MessageBox]::Show("Please provide the Site Code and Primary Site Server.","Required Fields",[System.Windows.Forms.MessageBoxButtons]::OK,[System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
             return
         }
         $cred = $null
         if ($chkAlt.Checked) {
-            $cred = Get-Credential -Message "Credenciais para acesso remoto aos servidores"
+            $cred = Get-Credential -Message "Credentials for remote access to servers"
             if (-not $cred) { return }
         }
 
