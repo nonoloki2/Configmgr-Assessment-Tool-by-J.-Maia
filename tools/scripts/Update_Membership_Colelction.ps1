@@ -1,7 +1,7 @@
 <# 
 .SYNOPSIS
 Força a atualização do membership da collection "Global Server Prod Patching (Saturday)"
-no site PR1.
+no site CT0.
 #>
 
 # Caminho do módulo do SCCM
@@ -10,8 +10,8 @@ $SCCMModulePath = "C:\Program Files (x86)\Microsoft Configuration Manager\AdminC
 Write-Host "Importando módulo do Configuration Manager..." -ForegroundColor Cyan
 Import-Module $SCCMModulePath -Force
 
-# Conectar ao site PR1
-cd PR1:
+# Conectar ao site CT0
+cd CT0:
 
 # Nome da collection
 $CollectionName = "Global Server Prod Patching (Saturday)"
