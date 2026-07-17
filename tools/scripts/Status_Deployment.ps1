@@ -1,7 +1,7 @@
 # Configurações
-$SiteServer = "maznasccmp01.na.admworld.com"   # Substitua pelo hostname real do seu servidor de site
-$SiteCode = "PR1"
-$CollectionName = "SCTASK1902722"
+$SiteServer = "win2K22SRV.contoso.local"   # Substitua pelo hostname real do seu servidor de site
+$SiteCode = "CT0"
+$CollectionName = "CT-desktops"
 $OutputPath = "C:\SCCM_Status_Export"
 
 # Garante o diretório
