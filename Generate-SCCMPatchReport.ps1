@@ -982,6 +982,8 @@ function Show-ReportGui {
     $form.MaximizeBox = $false
     $form.BackColor = $bgColor
     $form.Font = $fontRegular
+    $form.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::Font
+    $form.AutoScaleDimensions = New-Object System.Drawing.SizeF(6, 13)
 
     # --- Cabecalho estilizado ---
     $headerPanel = New-Object System.Windows.Forms.Panel
@@ -1117,7 +1119,7 @@ function Show-ReportGui {
     $cmbLang.DropDownStyle = "DropDownList"
     [void]$cmbLang.Items.Add("pt-BR")
     [void]$cmbLang.Items.Add("en-US")
-    $cmbLang.SelectedItem = $InitialDefaultLanguage
+    $cmbLang.SelectedIndex = if ($InitialDefaultLanguage -eq 'en-US') { 1 } else { 0 }
     $gbConfig.Controls.Add($cmbLang)
 
     New-FieldLabel -Parent $gbConfig -Text "Logo (URL, opcional):" -X 15 -Y 124
@@ -1230,7 +1232,8 @@ function Show-ReportGui {
         catch {
             $lblStatus.ForeColor = [System.Drawing.Color]::FromArgb(217, 48, 37)
             $lblStatus.Text = "Erro: $($_.Exception.Message)"
-            [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, "Erro ao gerar relatorio", `
+            $errDetail = "$($_.Exception.Message)`n`nLinha: $($_.InvocationInfo.ScriptLineNumber)`nComando: $($_.InvocationInfo.Line.Trim())"
+            [System.Windows.Forms.MessageBox]::Show($errDetail, "Erro ao gerar relatorio", `
                 [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
         }
         finally {
