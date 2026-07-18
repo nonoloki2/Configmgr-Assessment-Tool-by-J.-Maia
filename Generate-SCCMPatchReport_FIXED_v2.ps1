@@ -219,7 +219,6 @@ SELECT
     sys.ResourceID,
     sys.Name0                 AS Hostname,
     sys.AD_Site_Name0         AS ADSite,
-    sys.Client_Site_Code      AS ClientSite,
     sys.User_Name0            AS LastLogonUser,
     os.Caption0                AS OSCaption,
     os.Version0                 AS OSVersion,
@@ -354,7 +353,7 @@ WHERE ucs.CI_ID IN ($ciIdList)
             OSVersion      = Get-FriendlyWindowsVersion -Caption $sys['OSCaption'] -Build $sys['OSBuild']
             UPN            = if ($upn) { $upn } else { 'N/A' }
             IP             = if ($ip) { $ip } else { 'N/A' }
-            Site           = if ($sys['ADSite']) { $sys['ADSite'] } else { $sys['ClientSite'] }
+            Site           = if ($sys['ADSite'] -and $sys['ADSite'] -ne [DBNull]::Value) { $sys['ADSite'] } else { 'Sem site identificado' }
             Status         = $status
             ErrorDetail    = $errorText
             PendingReboot  = $pendingReboot
