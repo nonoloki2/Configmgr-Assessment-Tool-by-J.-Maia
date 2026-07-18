@@ -158,16 +158,22 @@ SELECT TOP 1
     col.Name AS CollectionName
 FROM v_CIAssignment ca
 LEFT JOIN v_Collection col ON col.CollectionID = ca.CollectionID
-WHERE ca.AssignmentID = @DeploymentID
+WHERE CAST(ca.AssignmentID AS NVARCHAR(50)) = @DeploymentID
 "@
     $deployInfo = Invoke-CmSqlQuery -Query $deploySql -Params @{ DeploymentID = $DeploymentID } -SqlServer $SqlServer -Database $Database
     if ($deployInfo.Rows.Count -eq 0) {
-        throw "Deployment '$DeploymentID' nao encontrado em v_CIAssignment. Rode esta query no SSMS para conferir o valor exato armazenado: SELECT AssignmentID, AssignmentName, CollectionID FROM v_CIAssignment WHERE CollectionID = '$CollectionID'"
+        $debugSql = "SELECT AssignmentID, AssignmentName FROM v_CIAssignment WHERE CAST(CollectionID AS NVARCHAR(20)) = @CollectionID"
+        $debugRows = Invoke-CmSqlQuery -Query $debugSql -Params @{ CollectionID = $CollectionID } -SqlServer $SqlServer -Database $Database
+        if ($debugRows.Rows.Count -eq 0) {
+            throw "Deployment '$DeploymentID' nao encontrado, e a CollectionID '$CollectionID' tambem nao tem NENHUM deployment em v_CIAssignment. Confira se a CollectionID esta correta, ou se o usuario/conta usada na conexao tem permissao de leitura nesta view."
+        }
+        $list = ($debugRows.Rows | ForEach-Object { "$($_.AssignmentID) = $($_.AssignmentName)" }) -join "`n"
+        throw "Deployment '$DeploymentID' nao encontrado. Deployments disponiveis para a CollectionID '$CollectionID':`n$list"
     }
     $deploy = $deployInfo.Rows[0]
 
     # --- CIs (updates) que fazem parte deste deployment -------------------
-    $ciSql = "SELECT CI_ID FROM v_CIAssignmentToCI WHERE AssignmentID = @DeploymentID"
+    $ciSql = "SELECT CI_ID FROM v_CIAssignmentToCI WHERE CAST(AssignmentID AS NVARCHAR(50)) = @DeploymentID"
     $ciRows = Invoke-CmSqlQuery -Query $ciSql -Params @{ DeploymentID = $DeploymentID } -SqlServer $SqlServer -Database $Database
     $ciIds = @($ciRows | ForEach-Object { $_.CI_ID })
     if ($ciIds.Count -eq 0) {
