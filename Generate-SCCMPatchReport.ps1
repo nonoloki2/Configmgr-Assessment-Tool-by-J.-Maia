@@ -167,7 +167,12 @@ WHERE CAST(ca.AssignmentID AS NVARCHAR(50)) = @DeploymentID
         if ($debugRows.Rows.Count -eq 0) {
             throw "Deployment '$DeploymentID' nao encontrado, e a CollectionID '$CollectionID' tambem nao tem NENHUM deployment em v_CIAssignment. Confira se a CollectionID esta correta, ou se o usuario/conta usada na conexao tem permissao de leitura nesta view."
         }
-        $list = ($debugRows.Rows | ForEach-Object { "$($_['AssignmentID']) = $($_['AssignmentName'])" }) -join "`n"
+        $listLines = New-Object System.Collections.Generic.List[string]
+        foreach ($drow in $debugRows.Rows) {
+            if ($null -eq $drow) { continue }
+            $listLines.Add("$($drow['AssignmentID']) = $($drow['AssignmentName'])")
+        }
+        $list = $listLines -join "`n"
         throw "Deployment '$DeploymentID' nao encontrado. Deployments disponiveis para a CollectionID '$CollectionID':`n$list"
     }
     $deploy = $deployInfo.Rows[0]
@@ -175,7 +180,10 @@ WHERE CAST(ca.AssignmentID AS NVARCHAR(50)) = @DeploymentID
     # --- CIs (updates) que fazem parte deste deployment -------------------
     $ciSql = "SELECT CI_ID FROM v_CIAssignmentToCI WHERE CAST(AssignmentID AS NVARCHAR(50)) = @DeploymentID"
     $ciRows = Invoke-CmSqlQuery -Query $ciSql -Params @{ DeploymentID = $DeploymentID } -SqlServer $SqlServer -Database $Database
-    $ciIds = @($ciRows | ForEach-Object { $_['CI_ID'] })
+    $ciIds = New-Object System.Collections.Generic.List[object]
+    foreach ($cirow in $ciRows) {
+        if ($null -ne $cirow) { $ciIds.Add($cirow['CI_ID']) }
+    }
     if ($ciIds.Count -eq 0) {
         throw "Nenhum update associado a este deployment foi encontrado."
     }
@@ -211,6 +219,7 @@ WHERE ip.ResourceID IN (SELECT ResourceID FROM v_FullCollectionMembership WHERE 
     $ipRows = Invoke-CmSqlQuery -Query $ipSql -Params @{ CollectionID = $CollectionID } -SqlServer $SqlServer -Database $Database
     $ipByResource = @{}
     foreach ($r in $ipRows) {
+        if ($null -eq $r) { continue }
         $ip = $r['IP_Addresses0']
         if ($ip -and $ip -notmatch '^169\.254' -and $ip -notmatch ':') {
             if (-not $ipByResource.ContainsKey($r['ResourceID'])) { $ipByResource[$r['ResourceID']] = $ip }
@@ -223,6 +232,7 @@ WHERE ip.ResourceID IN (SELECT ResourceID FROM v_FullCollectionMembership WHERE 
     $userRows = Invoke-CmSqlQuery -Query $userSql -SqlServer $SqlServer -Database $Database
     $upnByUser = @{}
     foreach ($u in $userRows) {
+        if ($null -eq $u) { continue }
         if ($u['User_Name0'] -and -not $upnByUser.ContainsKey($u['User_Name0'])) {
             $upnByUser[$u['User_Name0']] = $u['User_Principal_Name0']
         }
@@ -257,6 +267,7 @@ WHERE ucs.CI_ID IN ($ciIdList)
 
     $complianceByResource = @{}
     foreach ($c in $complianceRows) {
+        if ($null -eq $c) { continue }
         if (-not $complianceByResource.ContainsKey($c['ResourceID'])) { $complianceByResource[$c['ResourceID']] = @() }
         $complianceByResource[$c['ResourceID']] += $c
     }
@@ -266,6 +277,7 @@ WHERE ucs.CI_ID IN ($ciIdList)
     # --- Monta o resultado final por host --------------------------------------
     $GeneratedAt = Get-Date
     $hosts = foreach ($sys in $systems) {
+        if ($null -eq $sys) { continue }
         $rid = $sys['ResourceID']
         $rows = $complianceByResource[$rid]
 
@@ -274,23 +286,37 @@ WHERE ucs.CI_ID IN ($ciIdList)
         $pendingReboot = $false
 
         if ($rows -and $rows.Count -gt 0) {
-            $hasError   = $rows | Where-Object { $_['Status'] -eq 2 }
-            $allPresent = ($rows | Where-Object { $_['Status'] -ne 3 }).Count -eq 0
+            $errCodesList = New-Object System.Collections.Generic.List[string]
+            $foundError = $false
+            $foundNotPresent = $false
+            $foundPendingReboot = $false
 
-            if ($hasError) {
-                $status = 'Error'
-                $errCodes = $hasError | ForEach-Object {
-                    if ($_['LastErrorCode'] -and $_['LastErrorCode'] -ne 0) {
-                        "0x{0:X8}" -f $_['LastErrorCode']
+            foreach ($crow in $rows) {
+                if ($null -eq $crow) { continue }
+                $st = $crow['Status']
+                $errCode = $crow['LastErrorCode']
+                $enfName = $crow['EnforcementStateName']
+
+                if ($st -eq 2) {
+                    $foundError = $true
+                    if ($errCode -and $errCode -ne 0) {
+                        $codeStr = "0x{0:X8}" -f $errCode
+                        if (-not $errCodesList.Contains($codeStr)) { $errCodesList.Add($codeStr) }
                     }
-                } | Where-Object { $_ } | Select-Object -Unique
-                $errorText = if ($errCodes) { $errCodes -join ', ' } else { 'Falha na instalacao (sem codigo de erro reportado)' }
+                }
+                if ($st -ne 3) { $foundNotPresent = $true }
+                if ($enfName -and $enfName -match 'Restart|Reboot') { $foundPendingReboot = $true }
             }
-            elseif ($allPresent) {
+
+            if ($foundError) {
+                $status = 'Error'
+                $errorText = if ($errCodesList.Count -gt 0) { $errCodesList -join ', ' } else { 'Falha na instalacao (sem codigo de erro reportado)' }
+            }
+            elseif (-not $foundNotPresent) {
                 $status = 'Success'
             }
 
-            $pendingReboot = [bool]($rows | Where-Object { $_['EnforcementStateName'] -match 'Restart|Reboot' })
+            $pendingReboot = $foundPendingReboot
         }
 
         $ip = $ipByResource[$rid]
