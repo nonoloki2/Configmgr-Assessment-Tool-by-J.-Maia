@@ -1056,7 +1056,6 @@ function Show-ReportGui {
     $txtSqlServer.Location = New-Object System.Drawing.Point(170, 55)
     $txtSqlServer.Size = New-Object System.Drawing.Size(310, 24)
     $txtSqlServer.Text = $InitialSqlServer
-    $txtSqlServer.PlaceholderText = "ex: SCCMSQL01\SCCM"
     $gbSql.Controls.Add($txtSqlServer)
 
     New-FieldLabel -Parent $gbSql -Text "Database:" -X 15 -Y 90
@@ -1064,7 +1063,6 @@ function Show-ReportGui {
     $txtDatabase.Location = New-Object System.Drawing.Point(170, 87)
     $txtDatabase.Size = New-Object System.Drawing.Size(310, 24)
     $txtDatabase.Text = $InitialDatabase
-    $txtDatabase.PlaceholderText = "ex: CM_ABC"
     $gbSql.Controls.Add($txtDatabase)
 
     $chkDemo.Add_CheckedChanged({
