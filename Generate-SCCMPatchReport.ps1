@@ -140,6 +140,9 @@ function Get-LiveReportData {
 
     & $StatusCallback "Consultando metadados do deployment $DeploymentID ..."
 
+    $DeploymentID = $DeploymentID.Trim()
+    $CollectionID = $CollectionID.Trim()
+
     # --- Metadados do deployment (assignment) ---------------------------------
     # NOTA: dependendo da versao/build do SCCM, o nome da view pode ser
     # v_CIAssignment ou vSMS_CIAssignment. Rode antes:
@@ -154,12 +157,12 @@ SELECT TOP 1
     ca.StartTime,
     col.Name AS CollectionName
 FROM v_CIAssignment ca
-INNER JOIN v_Collection col ON col.CollectionID = ca.CollectionID
+LEFT JOIN v_Collection col ON col.CollectionID = ca.CollectionID
 WHERE ca.AssignmentID = @DeploymentID
 "@
     $deployInfo = Invoke-CmSqlQuery -Query $deploySql -Params @{ DeploymentID = $DeploymentID } -SqlServer $SqlServer -Database $Database
     if ($deployInfo.Rows.Count -eq 0) {
-        throw "Deployment '$DeploymentID' nao encontrado. Verifique o AssignmentID."
+        throw "Deployment '$DeploymentID' nao encontrado em v_CIAssignment. Rode esta query no SSMS para conferir o valor exato armazenado: SELECT AssignmentID, AssignmentName, CollectionID FROM v_CIAssignment WHERE CollectionID = '$CollectionID'"
     }
     $deploy = $deployInfo.Rows[0]
 
@@ -307,7 +310,7 @@ WHERE ucs.CI_ID IN ($ciIdList)
 
     return [PSCustomObject]@{
         DeploymentName = $deploy.AssignmentName
-        CollectionName = $deploy.CollectionName
+        CollectionName = if ($deploy.CollectionName -and $deploy.CollectionName -ne [DBNull]::Value) { $deploy.CollectionName } else { $deploy.CollectionID }
         Deadline       = $deploy.EnforcementDeadline
         StartTime      = $deploy.StartTime
         Hosts          = $hosts
@@ -1199,8 +1202,8 @@ function Show-ReportGui {
 
         try {
             $result = New-PatchReport `
-                -DeploymentID $txtDeploymentId.Text `
-                -CollectionID $txtCollectionId.Text `
+                -DeploymentID $txtDeploymentId.Text.Trim() `
+                -CollectionID $txtCollectionId.Text.Trim() `
                 -SqlServer $txtSqlServer.Text `
                 -Database $txtDatabase.Text `
                 -DemoMode:$chkDemo.Checked `
