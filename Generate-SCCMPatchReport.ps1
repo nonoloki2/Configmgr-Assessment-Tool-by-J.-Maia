@@ -167,7 +167,7 @@ WHERE CAST(ca.AssignmentID AS NVARCHAR(50)) = @DeploymentID
         if ($debugRows.Rows.Count -eq 0) {
             throw "Deployment '$DeploymentID' nao encontrado, e a CollectionID '$CollectionID' tambem nao tem NENHUM deployment em v_CIAssignment. Confira se a CollectionID esta correta, ou se o usuario/conta usada na conexao tem permissao de leitura nesta view."
         }
-        $list = ($debugRows.Rows | ForEach-Object { "$($_.AssignmentID) = $($_.AssignmentName)" }) -join "`n"
+        $list = ($debugRows.Rows | ForEach-Object { "$($_['AssignmentID']) = $($_['AssignmentName'])" }) -join "`n"
         throw "Deployment '$DeploymentID' nao encontrado. Deployments disponiveis para a CollectionID '$CollectionID':`n$list"
     }
     $deploy = $deployInfo.Rows[0]
@@ -175,7 +175,7 @@ WHERE CAST(ca.AssignmentID AS NVARCHAR(50)) = @DeploymentID
     # --- CIs (updates) que fazem parte deste deployment -------------------
     $ciSql = "SELECT CI_ID FROM v_CIAssignmentToCI WHERE CAST(AssignmentID AS NVARCHAR(50)) = @DeploymentID"
     $ciRows = Invoke-CmSqlQuery -Query $ciSql -Params @{ DeploymentID = $DeploymentID } -SqlServer $SqlServer -Database $Database
-    $ciIds = @($ciRows | ForEach-Object { $_.CI_ID })
+    $ciIds = @($ciRows | ForEach-Object { $_['CI_ID'] })
     if ($ciIds.Count -eq 0) {
         throw "Nenhum update associado a este deployment foi encontrado."
     }
@@ -211,9 +211,9 @@ WHERE ip.ResourceID IN (SELECT ResourceID FROM v_FullCollectionMembership WHERE 
     $ipRows = Invoke-CmSqlQuery -Query $ipSql -Params @{ CollectionID = $CollectionID } -SqlServer $SqlServer -Database $Database
     $ipByResource = @{}
     foreach ($r in $ipRows) {
-        $ip = $r.IP_Addresses0
+        $ip = $r['IP_Addresses0']
         if ($ip -and $ip -notmatch '^169\.254' -and $ip -notmatch ':') {
-            if (-not $ipByResource.ContainsKey($r.ResourceID)) { $ipByResource[$r.ResourceID] = $ip }
+            if (-not $ipByResource.ContainsKey($r['ResourceID'])) { $ipByResource[$r['ResourceID']] = $ip }
         }
     }
 
@@ -223,8 +223,8 @@ WHERE ip.ResourceID IN (SELECT ResourceID FROM v_FullCollectionMembership WHERE 
     $userRows = Invoke-CmSqlQuery -Query $userSql -SqlServer $SqlServer -Database $Database
     $upnByUser = @{}
     foreach ($u in $userRows) {
-        if ($u.User_Name0 -and -not $upnByUser.ContainsKey($u.User_Name0)) {
-            $upnByUser[$u.User_Name0] = $u.User_Principal_Name0
+        if ($u['User_Name0'] -and -not $upnByUser.ContainsKey($u['User_Name0'])) {
+            $upnByUser[$u['User_Name0']] = $u['User_Principal_Name0']
         }
     }
 
@@ -257,8 +257,8 @@ WHERE ucs.CI_ID IN ($ciIdList)
 
     $complianceByResource = @{}
     foreach ($c in $complianceRows) {
-        if (-not $complianceByResource.ContainsKey($c.ResourceID)) { $complianceByResource[$c.ResourceID] = @() }
-        $complianceByResource[$c.ResourceID] += $c
+        if (-not $complianceByResource.ContainsKey($c['ResourceID'])) { $complianceByResource[$c['ResourceID']] = @() }
+        $complianceByResource[$c['ResourceID']] += $c
     }
 
     & $StatusCallback "Processando dados por host ..."
@@ -266,7 +266,7 @@ WHERE ucs.CI_ID IN ($ciIdList)
     # --- Monta o resultado final por host --------------------------------------
     $GeneratedAt = Get-Date
     $hosts = foreach ($sys in $systems) {
-        $rid = $sys.ResourceID
+        $rid = $sys['ResourceID']
         $rows = $complianceByResource[$rid]
 
         $status = 'Unknown'
@@ -274,14 +274,14 @@ WHERE ucs.CI_ID IN ($ciIdList)
         $pendingReboot = $false
 
         if ($rows -and $rows.Count -gt 0) {
-            $hasError   = $rows | Where-Object { $_.Status -eq 2 }
-            $allPresent = ($rows | Where-Object { $_.Status -ne 3 }).Count -eq 0
+            $hasError   = $rows | Where-Object { $_['Status'] -eq 2 }
+            $allPresent = ($rows | Where-Object { $_['Status'] -ne 3 }).Count -eq 0
 
             if ($hasError) {
                 $status = 'Error'
                 $errCodes = $hasError | ForEach-Object {
-                    if ($_.LastErrorCode -and $_.LastErrorCode -ne 0) {
-                        "0x{0:X8}" -f $_.LastErrorCode
+                    if ($_['LastErrorCode'] -and $_['LastErrorCode'] -ne 0) {
+                        "0x{0:X8}" -f $_['LastErrorCode']
                     }
                 } | Where-Object { $_ } | Select-Object -Unique
                 $errorText = if ($errCodes) { $errCodes -join ', ' } else { 'Falha na instalacao (sem codigo de erro reportado)' }
@@ -290,23 +290,23 @@ WHERE ucs.CI_ID IN ($ciIdList)
                 $status = 'Success'
             }
 
-            $pendingReboot = [bool]($rows | Where-Object { $_.EnforcementStateName -match 'Restart|Reboot' })
+            $pendingReboot = [bool]($rows | Where-Object { $_['EnforcementStateName'] -match 'Restart|Reboot' })
         }
 
         $ip = $ipByResource[$rid]
-        $upn = if ($sys.LastLogonUser -and $upnByUser.ContainsKey($sys.LastLogonUser)) { $upnByUser[$sys.LastLogonUser] } else { $sys.LastLogonUser }
+        $upn = if ($sys['LastLogonUser'] -and $upnByUser.ContainsKey($sys['LastLogonUser'])) { $upnByUser[$sys['LastLogonUser']] } else { $sys['LastLogonUser'] }
 
         $uptimeDays = $null
-        if ($sys.LastBoot) {
-            $uptimeDays = [math]::Round((New-TimeSpan -Start $sys.LastBoot -End $GeneratedAt).TotalDays, 1)
+        if ($sys['LastBoot']) {
+            $uptimeDays = [math]::Round((New-TimeSpan -Start $sys['LastBoot'] -End $GeneratedAt).TotalDays, 1)
         }
 
         [PSCustomObject]@{
-            Hostname       = $sys.Hostname
-            OSVersion      = Get-FriendlyWindowsVersion -Caption $sys.OSCaption -Build $sys.OSBuild
+            Hostname       = $sys['Hostname']
+            OSVersion      = Get-FriendlyWindowsVersion -Caption $sys['OSCaption'] -Build $sys['OSBuild']
             UPN            = if ($upn) { $upn } else { 'N/A' }
             IP             = if ($ip) { $ip } else { 'N/A' }
-            Site           = if ($sys.ADSite) { $sys.ADSite } else { $sys.ClientSite }
+            Site           = if ($sys['ADSite']) { $sys['ADSite'] } else { $sys['ClientSite'] }
             Status         = $status
             ErrorDetail    = $errorText
             PendingReboot  = $pendingReboot
@@ -315,10 +315,10 @@ WHERE ucs.CI_ID IN ($ciIdList)
     }
 
     return [PSCustomObject]@{
-        DeploymentName = $deploy.AssignmentName
-        CollectionName = if ($deploy.CollectionName -and $deploy.CollectionName -ne [DBNull]::Value) { $deploy.CollectionName } else { $deploy.CollectionID }
-        Deadline       = $deploy.EnforcementDeadline
-        StartTime      = $deploy.StartTime
+        DeploymentName = $deploy['AssignmentName']
+        CollectionName = if ($deploy['CollectionName'] -and $deploy['CollectionName'] -ne [DBNull]::Value) { $deploy['CollectionName'] } else { $deploy['CollectionID'] }
+        Deadline       = $deploy['EnforcementDeadline']
+        StartTime      = $deploy['StartTime']
         Hosts          = $hosts
     }
 }
