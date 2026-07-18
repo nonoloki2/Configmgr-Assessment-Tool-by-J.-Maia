@@ -161,6 +161,27 @@ LEFT JOIN v_Collection col ON col.CollectionID = ca.CollectionID
 WHERE CAST(ca.AssignmentID AS NVARCHAR(50)) = @DeploymentID
 "@
     $deployInfo = Invoke-CmSqlQuery -Query $deploySql -Params @{ DeploymentID = $DeploymentID } -SqlServer $SqlServer -Database $Database
+
+    $diagTypeName = if ($null -eq $deployInfo) { '(null)' } else { $deployInfo.GetType().FullName }
+    $diagIsDataTable = $deployInfo -is [System.Data.DataTable]
+    $diagRowCount = if ($diagIsDataTable) { $deployInfo.Rows.Count } else { @($deployInfo).Count }
+
+    if (-not $diagIsDataTable -or $diagRowCount -eq 0) {
+        $diag = "DIAGNOSTICO INTERNO (para o desenvolvedor do script):`n"
+        $diag += "Tipo retornado por Invoke-CmSqlQuery: $diagTypeName`n"
+        $diag += "E uma DataTable? $diagIsDataTable`n"
+        $diag += "Contagem detectada: $diagRowCount`n"
+        if (-not $diagIsDataTable -and $diagRowCount -gt 0) {
+            $firstEl = @($deployInfo)[0]
+            $diag += "Tipo do 1o elemento: $($firstEl.GetType().FullName)`n"
+            $diag += "1o elemento (ToString): $($firstEl.ToString())`n"
+            if ($firstEl -is [System.Data.DataRow]) {
+                $diag += "1o elemento ItemArray: $($firstEl.ItemArray -join ' | ')`n"
+            }
+        }
+        throw $diag
+    }
+
     if ($deployInfo.Rows.Count -eq 0) {
         $debugSql = "SELECT AssignmentID, AssignmentName FROM v_CIAssignment WHERE CAST(CollectionID AS NVARCHAR(20)) = @CollectionID"
         $debugRows = Invoke-CmSqlQuery -Query $debugSql -Params @{ CollectionID = $CollectionID } -SqlServer $SqlServer -Database $Database
