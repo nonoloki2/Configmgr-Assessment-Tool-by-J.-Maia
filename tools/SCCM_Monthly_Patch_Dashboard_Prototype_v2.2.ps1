@@ -976,6 +976,21 @@ foreach ($name in @(
 $script:AllDeployments = @()
 $script:OutputFolder = Join-Path ([Environment]::GetFolderPath('Desktop')) 'SCCM_Patch_Reports'
 
+# Ao maximizar, reserva uma margem no topo em vez de encostar em Top=0.
+# Isso evita que a janela fique atrás de barras flutuantes de sessao remota
+# (Citrix Receiver/Workspace, CyberArk PSM, etc.), que se ancoram no topo da tela.
+$script:RemoteToolbarTopMargin = 42
+$window.Add_StateChanged({
+    if ($window.WindowState -eq 'Maximized') {
+        $window.WindowState = 'Normal'
+        $workArea = [System.Windows.SystemParameters]::WorkArea
+        $window.Left = $workArea.Left
+        $window.Top = $workArea.Top + $script:RemoteToolbarTopMargin
+        $window.Width = $workArea.Width
+        $window.Height = $workArea.Height - $script:RemoteToolbarTopMargin
+    }
+})
+
 function Update-DeploymentGrid {
     $query = $controls.txtSearch.Text.Trim().ToLowerInvariant()
 
