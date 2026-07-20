@@ -838,7 +838,7 @@ $xaml = @'
         Height="780" Width="1180" MinHeight="700" MinWidth="980"
         WindowStartupLocation="CenterScreen"
         WindowStyle="SingleBorderWindow"
-        ResizeMode="CanResizeWithGrip"
+        ResizeMode="CanResize"
         ShowInTaskbar="True"
         Background="#F1F5F9">
     <Grid Margin="20">
@@ -886,7 +886,7 @@ $xaml = @'
 
                 <TextBlock Grid.Row="2" Grid.Column="0" Text="Options" VerticalAlignment="Top" Margin="0,3,10,0"/>
                 <StackPanel Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="4" Orientation="Horizontal">
-                    <CheckBox x:Name="chkDemo" Content="Demo mode" IsChecked="True" Margin="0,0,24,0"/>
+                    <CheckBox x:Name="chkDemo" Content="Demo mode" IsChecked="False" Margin="0,0,24,0"/>
                     <CheckBox x:Name="chkUpn" Content="Resolve UPN with Active Directory" IsChecked="True" Margin="0,0,24,0"/>
                     <CheckBox x:Name="chkReboot" Content="Query pending reboot live (slower)" IsChecked="False"/>
                 </StackPanel>
@@ -1270,5 +1270,5 @@ $controls.btnGenerate.Add_Click({
 
 $controls.btnClose.Add_Click({ $window.Close() })
 
-Set-DemoUiState $true
+Set-DemoUiState $false
 $null = $window.ShowDialog()
