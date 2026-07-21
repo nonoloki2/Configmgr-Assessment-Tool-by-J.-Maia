@@ -150,10 +150,40 @@ function Get-SmsProviderData {
         }
     }
 
+    # OS name/build come from hardware inventory (SMS_G_System_OPERATING_SYSTEM), which is
+    # the authoritative source. CombinedDeviceResources' OS-related fields vary between
+    # ConfigMgr versions/sites and are often blank, so we query inventory directly instead.
+    $osMap = @{}
+    $osRowCount = 0
+    for ($i = 0; $i -lt $resourceIds.Count; $i += $batchSize) {
+        $end = [Math]::Min($i + $batchSize - 1, $resourceIds.Count - 1)
+        $ids = ($resourceIds[$i..$end] -join ',')
+        $query = "SELECT ResourceID, Caption00, BuildNumber00, Version00 FROM SMS_G_System_OPERATING_SYSTEM WHERE ResourceID IN ($ids)"
+        try {
+            $osRows = @(Get-CimInstance -ComputerName $ProviderServer -Namespace $namespace `
+                -Query $query -OperationTimeoutSec 180)
+            foreach ($row in $osRows) {
+                $osRowCount++
+                $osMap[[int]$row.ResourceID] = [pscustomobject]@{
+                    Caption     = [string]$row.Caption00
+                    BuildNumber = [string]$row.BuildNumber00
+                    Version     = [string]$row.Version00
+                }
+            }
+        }
+        catch {
+            Write-Log $LogPath "SMS_G_System_OPERATING_SYSTEM batch failed: $($_.Exception.Message)" 'WARN'
+        }
+    }
+    if ($osRowCount -eq 0) {
+        Write-Log $LogPath 'SMS_G_System_OPERATING_SYSTEM returned no rows for any device. OS Name/Build will be blank. This usually means hardware inventory is not enabled/collected for this collection, or the OPERATING_SYSTEM inventory class is disabled in Client Settings.' 'WARN'
+    }
+
     [pscustomobject]@{
         Summary     = $summary
         Assets      = $assets
         ResourceMap = $resourceMap
+        OsMap       = $osMap
     }
 }
 
@@ -307,6 +337,7 @@ function Convert-AssetsToRows {
     param(
         [object[]]$Assets,
         [hashtable]$ResourceMap,
+        [hashtable]$OsMap,
         [string]$SiteCode,
         [bool]$ResolveUpnEnabled,
         [bool]$PendingRebootEnabled,
@@ -390,6 +421,18 @@ function Convert-AssetsToRows {
                     }
                 }
             }
+        }
+
+        # Hardware inventory (SMS_G_System_OPERATING_SYSTEM) is the authoritative source;
+        # it overrides whatever (if anything) CombinedDeviceResources provided above.
+        if ($OsMap -and $OsMap.ContainsKey([int]$asset.ResourceID)) {
+            $osInfo = $OsMap[[int]$asset.ResourceID]
+            if (-not [string]::IsNullOrWhiteSpace($osInfo.Caption)) { $osName = $osInfo.Caption }
+            if (-not [string]::IsNullOrWhiteSpace($osInfo.BuildNumber)) { $osBuild = $osInfo.BuildNumber }
+        }
+
+        if ([string]::IsNullOrWhiteSpace($osName) -and [string]::IsNullOrWhiteSpace($osBuild) -and $LogPath) {
+            Write-Log $LogPath "No OS name/build available for ResourceID $($asset.ResourceID) (device '$deviceName') from inventory or CombinedDeviceResources." 'WARN'
         }
 
         $errorCodeValue = 0
@@ -1238,6 +1281,7 @@ $controls.btnGenerate.Add_Click({
             $rows = Convert-AssetsToRows `
                 -Assets $providerData.Assets `
                 -ResourceMap $providerData.ResourceMap `
+                -OsMap $providerData.OsMap `
                 -SiteCode $siteCode `
                 -ResolveUpnEnabled ([bool]$controls.chkUpn.IsChecked) `
                 -PendingRebootEnabled ([bool]$controls.chkReboot.IsChecked) `
