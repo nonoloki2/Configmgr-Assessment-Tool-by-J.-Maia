@@ -40,7 +40,7 @@ Add-Type -AssemblyName System.Drawing
 # runspaces distintos).
 function Initialize-ScriptConfig {
     $global:AppName    = "ConfigMgr Infrastructure Health Assessment"
-    $global:AppVersion = "2.0.0"
+    $global:AppVersion = "2.0.1"
 
     $global:Thresholds = [ordered]@{
         DiskFreePctCritical   = 10
@@ -745,12 +745,35 @@ function Get-ManagementPointHealth {
             } catch {
                 $code = $null
                 try { $code = [int]$_.Exception.Response.StatusCode.value__ } catch {}
-                $status = if ($scheme -eq 'https' -and $code -in @(401,403)) { 'Info' } else { 'Critical' }
-                $value = if ($code) { "HTTP $code" } else { 'No HTTP response' }
+
+                $exceptionMessage = [string]$_.Exception.Message
+                $isTlsTrustFailure = ($scheme -eq 'https' -and -not $code -and $exceptionMessage -match '(?i)trust relationship|SSL/TLS secure channel|certificate.*(invalid|untrusted|chain)|could not establish trust|authentication failed.*remote party')
+                $componentHealthy = @($findings | Where-Object { $_.Check -eq 'ConfigMgr Component: SMS_MP_CONTROL_MANAGER' -and $_.Status -eq 'Healthy' }).Count -gt 0
+                $mpControlHealthy = @($findings | Where-Object { $_.Check -eq 'mpcontrol.log - Last HTTP success' -and $_.Status -eq 'Healthy' }).Count -gt 0
+
+                if ($scheme -eq 'https' -and $code -in @(401,403)) {
+                    $status = 'Info'
+                    $value = "HTTP $code"
+                    $findingText = 'The HTTPS endpoint responded and requires authentication. This proves that IIS is reachable.'
+                    $recommendation = ''
+                }
+                elseif ($isTlsTrustFailure) {
+                    $status = if ($componentHealthy -and $mpControlHealthy) { 'Info' } else { 'Warning' }
+                    $value = 'TLS trust validation failed'
+                    $findingText = 'The report runner could not validate the HTTPS certificate chain. This does not prove that the Management Point is unavailable.'
+                    $recommendation = 'Validate the issuing CA and intermediate certificates on the computer running the report, confirm the certificate subject/SAN matches the MP FQDN, and review certificate expiration. Do not treat this result alone as an MP outage.'
+                }
+                else {
+                    $status = 'Critical'
+                    $value = if ($code) { "HTTP $code" } else { 'No HTTP response' }
+                    $findingText = 'The Management Point endpoint did not return a usable HTTP response.'
+                    $recommendation = 'Validate IIS bindings, MP virtual directories, authentication, certificate configuration, and SQL connectivity.'
+                }
+
                 $findings += New-Finding -Check "MP Endpoint: $scheme $queryName" -Status $status -Value $value `
-                    -FindingText "The Management Point endpoint did not return HTTP 200." `
-                    -Evidence "$uri | $($_.Exception.Message)" `
-                    -Recommendation $(if ($status -eq 'Critical') { 'Validate IIS bindings, MP virtual directories, authentication, certificate trust, and SQL connectivity.' } else { '' })
+                    -FindingText $findingText `
+                    -Evidence "$uri | $exceptionMessage" `
+                    -Recommendation $recommendation
             }
         }
     }
