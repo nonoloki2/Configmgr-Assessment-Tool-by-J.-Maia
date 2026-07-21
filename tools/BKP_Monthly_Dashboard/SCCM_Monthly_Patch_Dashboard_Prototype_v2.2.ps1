@@ -351,6 +351,40 @@ function Get-DemoData {
     }
 }
 
+function Get-WindowsVersionLabel {
+    param(
+        [string]$Caption,
+        [string]$Build
+    )
+    if ([string]::IsNullOrWhiteSpace($Build)) { return '' }
+    $major = ($Build -split '\.')[0]
+
+    $isServer = $Caption -match '(?i)server'
+
+    if ($isServer) {
+        $serverMap = @{
+            '14393' = '2016'
+            '17763' = '2019'
+            '20348' = '2022'
+            '26100' = '2025'
+        }
+        if ($serverMap.ContainsKey($major)) { return $serverMap[$major] }
+        return ''
+    }
+
+    $clientMap = @{
+        '10240' = '1507';  '10586' = '1511';  '14393' = '1607'
+        '15063' = '1703';  '16299' = '1709';  '17134' = '1803'
+        '17763' = '1809';  '18362' = '1903';  '18363' = '1909'
+        '19041' = '2004';  '19042' = '20H2';  '19043' = '21H1'
+        '19044' = '21H2';  '19045' = '22H2'
+        '22000' = '21H2';  '22621' = '22H2';  '22631' = '23H2'
+        '26100' = '24H2';  '26200' = '25H2'
+    }
+    if ($clientMap.ContainsKey($major)) { return $clientMap[$major] }
+    return ''
+}
+
 function Convert-AssetsToRows {
     param(
         [object[]]$Assets,
@@ -469,6 +503,8 @@ function Convert-AssetsToRows {
             }
         }
 
+        $osVersion = Get-WindowsVersionLabel -Caption $osName -Build $osBuild
+
         $rows.Add([pscustomobject]@{
             Device                  = $deviceName
             ClientType              = $clientType
@@ -483,6 +519,7 @@ function Convert-AssetsToRows {
             Domain                  = $domain
             LastOnlineTime          = $lastOnline
             OperatingSystem         = $osName
+            OSVersion               = $osVersion
             OSBuildNumber           = $osBuild
             PendingRestart          = $pending
             DeploymentStatus        = Get-StatusName ([int]$asset.StatusType)
@@ -533,6 +570,7 @@ function New-DetailPage {
         "<td>$(ConvertTo-HtmlSafe $r.Domain)</td>" +
         "<td>$(ConvertTo-HtmlSafe $r.LastOnlineTime)</td>" +
         "<td>$(ConvertTo-HtmlSafe $r.OperatingSystem)</td>" +
+        "<td>$(ConvertTo-HtmlSafe $r.OSVersion)</td>" +
         "<td>$(ConvertTo-HtmlSafe $r.OSBuildNumber)</td>" +
         "<td>$(ConvertTo-HtmlSafe $r.PendingRestart)</td>" +
         "<td><span class='badge $statusClass'>$(ConvertTo-HtmlSafe $titleStatus)</span></td>" +
@@ -591,7 +629,7 @@ table{border-collapse:separate;border-spacing:0;width:100%;min-width:2600px;font
 <thead><tr>
 <th>Device</th><th>Client Type</th><th>Client</th><th>Current Logged-on User</th><th>User UPN</th><th>UPN Source</th>
 <th>Site Code</th><th>Client Activity</th><th>AD Site</th><th>Device Status</th><th>Domain</th><th>Last Online Time</th>
-<th>Operating System</th><th>OS Build Number</th><th>Pending Restart</th><th>Deployment Status</th><th>Status Description</th>
+<th>Operating System</th><th>OS Version</th><th>OS Build Number</th><th>Pending Restart</th><th>Deployment Status</th><th>Status Description</th>
 <th>Error Code</th><th>Error Description</th><th>Last Status Time</th><th>Last Enforcement Message</th><th>Resource ID</th>
 </tr></thead>
 <tbody>
