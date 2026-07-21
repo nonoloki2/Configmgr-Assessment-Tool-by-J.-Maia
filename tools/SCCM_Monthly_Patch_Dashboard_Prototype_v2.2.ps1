@@ -365,6 +365,7 @@ function Start-RebootCheckServer {
                 $resp.Headers.Add('Access-Control-Allow-Origin', '*')
                 $resp.Headers.Add('Access-Control-Allow-Headers', 'Content-Type')
                 $resp.Headers.Add('Access-Control-Allow-Methods', 'GET, OPTIONS')
+                $resp.Headers.Add('Access-Control-Allow-Private-Network', 'true')
                 try {
                     if ($req.HttpMethod -eq 'OPTIONS') {
                         $resp.StatusCode = 204
