@@ -161,12 +161,11 @@ function Resolve-Upn {
     param(
         [string]$UserID,
         [hashtable]$Cache,
-        [bool]$Enabled,
-        [string]$LogPath
+        [bool]$Enabled
     )
 
     if ([string]::IsNullOrWhiteSpace($UserID)) {
-        return [pscustomobject]@{ UPN = ''; Source = 'Not Resolved (no logged-on user)' }
+        return [pscustomobject]@{ UPN = ''; Source = 'Not Resolved' }
     }
 
     if ($UserID -match '@') {
@@ -188,23 +187,10 @@ function Resolve-Upn {
             if ($adUser -and $adUser.UserPrincipalName) {
                 $result = [pscustomobject]@{ UPN = [string]$adUser.UserPrincipalName; Source = 'Active Directory' }
             }
-            else {
-                $result = [pscustomobject]@{ UPN = ''; Source = 'Not Resolved (user not found in AD)' }
-                if ($LogPath) { Write-Log $LogPath "UPN lookup: no AD user found for SamAccountName '$sam' (from UserID '$UserID')." 'WARN' }
-            }
         }
         catch {
-            $reason = if ($_.Exception.Message -match 'module|Import-Module') {
-                'AD module unavailable'
-            } else {
-                'AD query error'
-            }
-            $result = [pscustomobject]@{ UPN = ''; Source = "Not Resolved ($reason)" }
-            if ($LogPath) { Write-Log $LogPath "UPN lookup failed for '$UserID': $($_.Exception.Message)" 'WARN' }
+            $result = [pscustomobject]@{ UPN = ''; Source = 'Not Resolved' }
         }
-    }
-    else {
-        $result = [pscustomobject]@{ UPN = ''; Source = 'Not Resolved (AD resolution disabled)' }
     }
 
     $Cache[$UserID] = $result
@@ -323,7 +309,7 @@ function Convert-AssetsToRows {
             }
         }
 
-        $upnResult = Resolve-Upn -UserID $userId -Cache $upnCache -Enabled $ResolveUpnEnabled -LogPath $LogPath
+        $upnResult = Resolve-Upn -UserID $userId -Cache $upnCache -Enabled $ResolveUpnEnabled
         $deviceName = [string]$asset.DeviceName
         $pending = Get-PendingRebootState -ComputerName $deviceName -Enabled $PendingRebootEnabled
 
