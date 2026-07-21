@@ -191,9 +191,13 @@ function Resolve-Upn {
             }
             $sam = ($UserID -split '\\')[-1]
             $adUser = Get-ADUser -Filter "SamAccountName -eq '$($sam.Replace("'","''"))'" `
-                -Properties UserPrincipalName -ErrorAction Stop | Select-Object -First 1
-            if ($adUser -and $adUser.UserPrincipalName) {
-                $result = [pscustomobject]@{ UPN = [string]$adUser.UserPrincipalName; Source = 'Active Directory' }
+                -Properties UserPrincipalName, Mail -ErrorAction Stop | Select-Object -First 1
+            if ($adUser -and $adUser.Mail) {
+                $result = [pscustomobject]@{ UPN = [string]$adUser.Mail; Source = 'Active Directory (mail)' }
+            }
+            elseif ($adUser -and $adUser.UserPrincipalName) {
+                $result = [pscustomobject]@{ UPN = [string]$adUser.UserPrincipalName; Source = 'Active Directory (login UPN, no mail set)' }
+                if ($LogPath) { Write-Log $LogPath "UPN lookup: AD user '$sam' has no 'mail' attribute; falling back to login UserPrincipalName." 'WARN' }
             }
             else {
                 $result = [pscustomobject]@{ UPN = ''; Source = 'Not Resolved (user not found in AD)' }
