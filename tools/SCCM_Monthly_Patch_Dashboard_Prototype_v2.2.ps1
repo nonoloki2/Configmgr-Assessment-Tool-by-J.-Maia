@@ -157,6 +157,13 @@ function Get-SmsProviderData {
     }
 }
 
+function Test-IsSystemAccount {
+    param([string]$UserID)
+    if ([string]::IsNullOrWhiteSpace($UserID)) { return $false }
+    $sam = ($UserID -split '\\')[-1].Trim('(', ')')
+    return $sam -in @('SYSTEM', 'NETWORK SERVICE', 'LOCAL SERVICE', 'ANONYMOUS LOGON')
+}
+
 function Resolve-Upn {
     param(
         [string]$UserID,
@@ -314,9 +321,10 @@ function Convert-AssetsToRows {
         }
 
         $userId = [string]$asset.UserID
+        if (Test-IsSystemAccount $userId) { $userId = '' }
         if ([string]::IsNullOrWhiteSpace($userId) -and $resource) {
             foreach ($prop in @('CurrentLogonUser','UserName','LastLogonUserName','PrimaryUser')) {
-                if ($resource.PSObject.Properties.Name -contains $prop -and $resource.$prop) {
+                if ($resource.PSObject.Properties.Name -contains $prop -and $resource.$prop -and -not (Test-IsSystemAccount ([string]$resource.$prop))) {
                     $userId = [string]$resource.$prop
                     break
                 }
