@@ -324,144 +324,226 @@ function Start-RebootCheckServer {
         [string]$LogPath
     )
 
-    $listener = New-Object System.Net.HttpListener
-    $listener.Prefixes.Add("http://127.0.0.1:$Port/")
+    # Use TcpListener instead of HttpListener. HttpListener depends on HTTP.sys
+    # URL reservations and can fail for non-admin users with "Access denied",
+    # making the HTML button show "Unavailable/No response - retry" before the
+    # remote CIM query is even attempted. TcpListener binds only to loopback,
+    # needs no URL ACL and preserves the same browser API used by the report.
     try {
+        $listener = [System.Net.Sockets.TcpListener]::new(
+            [System.Net.IPAddress]::Loopback,
+            $Port
+        )
         $listener.Start()
     }
     catch {
-        Write-Log $LogPath "Reboot-check server could not start on http://127.0.0.1:$Port/: $($_.Exception.Message). 'Check' buttons in reports will show as unavailable." 'WARN'
+        Write-Log $LogPath "Reboot-check TCP server could not start on http://127.0.0.1:$Port/: $($_.Exception.Message). 'Check' buttons in reports will show as unavailable." 'WARN'
         return $null
     }
 
-    # Note: each incoming request spawns its own short-lived nested runspace to
-    # actually perform the CIM check (see worker script below), bounded by a
-    # hard 15s deadline. This is necessary because ICMP (ping) reachability
-    # does not guarantee WMI/DCOM ports (135 + dynamic RPC range) are open --
-    # if they're blocked, New-CimSession's underlying TCP connect attempt can
-    # hang far longer than the CIM operation timeout parameter accounts for.
-    # The deadline guarantees the HTTP response (and therefore the "Check"
-    # button in the report) always resolves, even against unreachable hosts.
-    $pool = [runspacefactory]::CreateRunspacePool(1, 6)
-    $pool.Open()
-
     $acceptScript = {
-        param($Listener, $Pool, $Token, $LogPath)
+        param($Listener, $Token, $LogPath)
 
-        while ($Listener.IsListening) {
+        function Send-HttpResponse {
+            param(
+                [System.Net.Sockets.NetworkStream]$Stream,
+                [int]$StatusCode,
+                [string]$StatusText,
+                [string]$Body,
+                [string]$ContentType = 'application/json; charset=utf-8'
+            )
+
+            if ($null -eq $Body) { $Body = '' }
+            $bodyBytes = [System.Text.Encoding]::UTF8.GetBytes($Body)
+            $headers = @(
+                "HTTP/1.1 $StatusCode $StatusText",
+                "Content-Type: $ContentType",
+                "Content-Length: $($bodyBytes.Length)",
+                'Access-Control-Allow-Origin: *',
+                'Access-Control-Allow-Headers: Content-Type',
+                'Access-Control-Allow-Methods: GET, OPTIONS',
+                'Access-Control-Allow-Private-Network: true',
+                'Connection: close',
+                '',
+                ''
+            ) -join "`r`n"
+
+            $headerBytes = [System.Text.Encoding]::ASCII.GetBytes($headers)
+            $Stream.Write($headerBytes, 0, $headerBytes.Length)
+            if ($bodyBytes.Length -gt 0) {
+                $Stream.Write($bodyBytes, 0, $bodyBytes.Length)
+            }
+            $Stream.Flush()
+        }
+
+        function Get-QueryValues {
+            param([string]$Target)
+            $values = @{}
+            $question = $Target.IndexOf('?')
+            if ($question -lt 0 -or $question -ge ($Target.Length - 1)) { return $values }
+
+            foreach ($pair in $Target.Substring($question + 1).Split('&')) {
+                if ([string]::IsNullOrWhiteSpace($pair)) { continue }
+                $parts = $pair.Split('=', 2)
+                $key = [System.Uri]::UnescapeDataString(($parts[0] -replace '\+', ' '))
+                $value = if ($parts.Count -gt 1) {
+                    [System.Uri]::UnescapeDataString(($parts[1] -replace '\+', ' '))
+                } else { '' }
+                $values[$key] = $value
+            }
+            return $values
+        }
+
+        while ($true) {
+            $client = $null
+            $stream = $null
             try {
-                $context = $Listener.GetContext()
-            }
-            catch {
-                break
-            }
+                $client = $Listener.AcceptTcpClient()
+                $client.ReceiveTimeout = 5000
+                $client.SendTimeout = 5000
+                $stream = $client.GetStream()
 
-            $worker = [powershell]::Create()
-            $worker.RunspacePool = $Pool
-            [void]$worker.AddScript({
-                param($Context, $Token)
-                $req = $Context.Request
-                $resp = $Context.Response
-                $resp.Headers.Add('Access-Control-Allow-Origin', '*')
-                $resp.Headers.Add('Access-Control-Allow-Headers', 'Content-Type')
-                $resp.Headers.Add('Access-Control-Allow-Methods', 'GET, OPTIONS')
-                $resp.Headers.Add('Access-Control-Allow-Private-Network', 'true')
+                $reader = [System.IO.StreamReader]::new(
+                    $stream,
+                    [System.Text.Encoding]::ASCII,
+                    $false,
+                    4096,
+                    $true
+                )
+
+                $requestLine = $reader.ReadLine()
+                if ([string]::IsNullOrWhiteSpace($requestLine)) {
+                    Send-HttpResponse -Stream $stream -StatusCode 400 -StatusText 'Bad Request' -Body '{"status":"Bad Request"}'
+                    continue
+                }
+
+                # Consume request headers. Browser preflight headers do not need
+                # special parsing; they only need a valid OPTIONS response.
+                while ($true) {
+                    $line = $reader.ReadLine()
+                    if ($null -eq $line -or $line.Length -eq 0) { break }
+                }
+
+                $requestParts = $requestLine.Split(' ')
+                if ($requestParts.Count -lt 2) {
+                    Send-HttpResponse -Stream $stream -StatusCode 400 -StatusText 'Bad Request' -Body '{"status":"Bad Request"}'
+                    continue
+                }
+
+                $method = $requestParts[0].ToUpperInvariant()
+                $target = $requestParts[1]
+
+                if ($method -eq 'OPTIONS') {
+                    Send-HttpResponse -Stream $stream -StatusCode 204 -StatusText 'No Content' -Body '' -ContentType 'text/plain; charset=utf-8'
+                    continue
+                }
+
+                if ($method -ne 'GET') {
+                    Send-HttpResponse -Stream $stream -StatusCode 405 -StatusText 'Method Not Allowed' -Body '{"status":"Method Not Allowed"}'
+                    continue
+                }
+
+                $query = Get-QueryValues -Target $target
+                $device = [string]$query['device']
+                $tok = [string]$query['token']
+
+                if ($tok -ne $Token) {
+                    Send-HttpResponse -Stream $stream -StatusCode 401 -StatusText 'Unauthorized' -Body '{"status":"Unauthorized"}'
+                    continue
+                }
+                if ([string]::IsNullOrWhiteSpace($device)) {
+                    Send-HttpResponse -Stream $stream -StatusCode 400 -StatusText 'Bad Request' -Body '{"status":"Bad Request"}'
+                    continue
+                }
+
+                $checkScript = {
+                    param([string]$ComputerName)
+                    $session = $null
+                    try {
+                        $sessionOption = New-CimSessionOption -Protocol Dcom
+                        $session = New-CimSession -ComputerName $ComputerName -SessionOption $sessionOption `
+                            -OperationTimeoutSec 10 -ErrorAction Stop
+                        $result = Invoke-CimMethod -CimSession $session -Namespace 'root\ccm\ClientSDK' `
+                            -ClassName 'CCM_ClientUtilities' -MethodName 'DetermineIfRebootPending' `
+                            -OperationTimeoutSec 10 -ErrorAction Stop
+                        if ($result.RebootPending -or $result.IsHardRebootPending) { return 'Yes' }
+                        return 'No'
+                    }
+                    catch {
+                        return 'Unable to Query'
+                    }
+                    finally {
+                        if ($session) {
+                            Remove-CimSession -CimSession $session -ErrorAction SilentlyContinue
+                        }
+                    }
+                }
+
+                $nested = [powershell]::Create()
                 try {
-                    if ($req.HttpMethod -eq 'OPTIONS') {
-                        $resp.StatusCode = 204
-                        return
-                    }
+                    [void]$nested.AddScript($checkScript)
+                    [void]$nested.AddArgument($device)
+                    $asyncResult = $nested.BeginInvoke()
 
-                    $query = [System.Web.HttpUtility]::ParseQueryString($req.Url.Query)
-                    $device = $query['device']
-                    $tok = $query['token']
-
-                    if ($tok -ne $Token) {
-                        $resp.StatusCode = 401
-                        $payload = '{"status":"Unauthorized"}'
-                    }
-                    elseif ([string]::IsNullOrWhiteSpace($device)) {
-                        $resp.StatusCode = 400
-                        $payload = '{"status":"Bad Request"}'
+                    if ($asyncResult.AsyncWaitHandle.WaitOne(15000)) {
+                        try {
+                            $state = $nested.EndInvoke($asyncResult) | Select-Object -Last 1
+                            if (-not $state) { $state = 'Unable to Query' }
+                        }
+                        catch {
+                            $state = 'Unable to Query'
+                        }
                     }
                     else {
-                        $checkScript = {
-                            param([string]$ComputerName)
-                            try {
-                                $sessionOption = New-CimSessionOption -Protocol Dcom
-                                $session = New-CimSession -ComputerName $ComputerName -SessionOption $sessionOption `
-                                    -OperationTimeoutSec 10 -ErrorAction Stop
-                                try {
-                                    $result = Invoke-CimMethod -CimSession $session -Namespace 'root\ccm\ClientSDK' `
-                                        -ClassName 'CCM_ClientUtilities' -MethodName 'DetermineIfRebootPending' `
-                                        -OperationTimeoutSec 10 -ErrorAction Stop
-                                    if ($result.RebootPending -or $result.IsHardRebootPending) { return 'Yes' }
-                                    return 'No'
-                                }
-                                finally {
-                                    Remove-CimSession -CimSession $session -ErrorAction SilentlyContinue
-                                }
-                            }
-                            catch {
-                                return 'Unable to Query'
-                            }
-                        }
-
-                        $nested = [powershell]::Create()
-                        [void]$nested.AddScript($checkScript)
-                        [void]$nested.AddArgument($device)
-                        $asyncResult = $nested.BeginInvoke()
-
-                        if ($asyncResult.AsyncWaitHandle.WaitOne(15000)) {
-                            try {
-                                $state = $nested.EndInvoke($asyncResult) | Select-Object -Last 1
-                                if (-not $state) { $state = 'Unable to Query' }
-                            }
-                            catch {
-                                $state = 'Unable to Query'
-                            }
-                        }
-                        else {
-                            $state = 'Unable to Query (timeout)'
-                            try { $nested.Stop() } catch {}
-                        }
-                        try { $nested.Dispose() } catch {}
-
-                        $safeDevice = $device -replace '"', ''
-                        $payload = '{{"status":"{0}","device":"{1}"}}' -f $state, $safeDevice
+                        $state = 'Unable to Query (timeout)'
+                        try { $nested.Stop() } catch {}
                     }
-
-                    $buffer = [System.Text.Encoding]::UTF8.GetBytes($payload)
-                    $resp.ContentType = 'application/json'
-                    $resp.ContentLength64 = $buffer.Length
-                    $resp.OutputStream.Write($buffer, 0, $buffer.Length)
-                }
-                catch {
-                    try { $resp.StatusCode = 500 } catch {}
                 }
                 finally {
-                    try { $resp.OutputStream.Close() } catch {}
+                    try { $nested.Dispose() } catch {}
                 }
-            }) | Out-Null
-            [void]$worker.AddArgument($context)
-            [void]$worker.AddArgument($Token)
-            $worker.BeginInvoke() | Out-Null
+
+                $payloadObject = [ordered]@{
+                    status = [string]$state
+                    device = $device
+                }
+                $payload = $payloadObject | ConvertTo-Json -Compress
+                Send-HttpResponse -Stream $stream -StatusCode 200 -StatusText 'OK' -Body $payload
+            }
+            catch [System.Management.Automation.MethodInvocationException] {
+                # AcceptTcpClient throws when Listener.Stop() is called during shutdown.
+                if (-not $Listener.Server.IsBound) { break }
+                if ($LogPath) {
+                    try { Add-Content -LiteralPath $LogPath -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') [WARN] Reboot-check TCP request error: $($_.Exception.Message)" -Encoding UTF8 } catch {}
+                }
+            }
+            catch {
+                if ($LogPath) {
+                    try { Add-Content -LiteralPath $LogPath -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') [WARN] Reboot-check TCP request error: $($_.Exception.Message)" -Encoding UTF8 } catch {}
+                }
+                if ($stream) {
+                    try { Send-HttpResponse -Stream $stream -StatusCode 500 -StatusText 'Internal Server Error' -Body '{"status":"Server Error"}' } catch {}
+                }
+            }
+            finally {
+                if ($stream) { try { $stream.Dispose() } catch {} }
+                if ($client) { try { $client.Close() } catch {} }
+            }
         }
     }
 
     $acceptPS = [powershell]::Create()
     [void]$acceptPS.AddScript($acceptScript)
     [void]$acceptPS.AddArgument($listener)
-    [void]$acceptPS.AddArgument($pool)
     [void]$acceptPS.AddArgument($Token)
     [void]$acceptPS.AddArgument($LogPath)
     $acceptHandle = $acceptPS.BeginInvoke()
 
-    Write-Log $LogPath "Reboot-check server listening on http://127.0.0.1:$Port/ (loopback only)." 'INFO'
+    Write-Log $LogPath "Reboot-check TCP server listening on http://127.0.0.1:$Port/ (loopback only; no URL ACL required)." 'INFO'
 
     [pscustomobject]@{
         Listener     = $listener
-        Pool         = $pool
+        Pool         = $null
         AcceptPS     = $acceptPS
         AcceptHandle = $acceptHandle
     }
