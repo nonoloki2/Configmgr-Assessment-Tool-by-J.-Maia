@@ -334,35 +334,15 @@ function Start-RebootCheckServer {
         return $null
     }
 
-    # Give each worker runspace its own copy of the CIM-checking function so
-    # incoming requests don't need to redefine it every time.
-    $iss = [System.Management.Automation.Runspaces.InitialSessionState]::CreateDefault()
-    $funcBody = {
-        param([string]$ComputerName)
-        try {
-            $sessionOption = New-CimSessionOption -Protocol Dcom
-            $session = New-CimSession -ComputerName $ComputerName -SessionOption $sessionOption `
-                -OperationTimeoutSec 12 -ErrorAction Stop
-            try {
-                $result = Invoke-CimMethod -CimSession $session -Namespace 'root\ccm\ClientSDK' `
-                    -ClassName 'CCM_ClientUtilities' -MethodName 'DetermineIfRebootPending' `
-                    -OperationTimeoutSec 12 -ErrorAction Stop
-                if ($result.RebootPending -or $result.IsHardRebootPending) { return 'Yes' }
-                return 'No'
-            }
-            finally {
-                Remove-CimSession -CimSession $session -ErrorAction SilentlyContinue
-            }
-        }
-        catch {
-            return 'Unable to Query'
-        }
-    }
-    $entry = New-Object System.Management.Automation.Runspaces.SessionStateFunctionEntry(
-        'Get-PendingRebootStateLocal', $funcBody.ToString())
-    $iss.Commands.Add($entry)
-
-    $pool = [runspacefactory]::CreateRunspacePool(1, 6, $iss, $Host)
+    # Note: each incoming request spawns its own short-lived nested runspace to
+    # actually perform the CIM check (see worker script below), bounded by a
+    # hard 15s deadline. This is necessary because ICMP (ping) reachability
+    # does not guarantee WMI/DCOM ports (135 + dynamic RPC range) are open --
+    # if they're blocked, New-CimSession's underlying TCP connect attempt can
+    # hang far longer than the CIM operation timeout parameter accounts for.
+    # The deadline guarantees the HTTP response (and therefore the "Check"
+    # button in the report) always resolves, even against unreachable hosts.
+    $pool = [runspacefactory]::CreateRunspacePool(1, 6)
     $pool.Open()
 
     $acceptScript = {
@@ -404,7 +384,48 @@ function Start-RebootCheckServer {
                         $payload = '{"status":"Bad Request"}'
                     }
                     else {
-                        $state = Get-PendingRebootStateLocal -ComputerName $device
+                        $checkScript = {
+                            param([string]$ComputerName)
+                            try {
+                                $sessionOption = New-CimSessionOption -Protocol Dcom
+                                $session = New-CimSession -ComputerName $ComputerName -SessionOption $sessionOption `
+                                    -OperationTimeoutSec 10 -ErrorAction Stop
+                                try {
+                                    $result = Invoke-CimMethod -CimSession $session -Namespace 'root\ccm\ClientSDK' `
+                                        -ClassName 'CCM_ClientUtilities' -MethodName 'DetermineIfRebootPending' `
+                                        -OperationTimeoutSec 10 -ErrorAction Stop
+                                    if ($result.RebootPending -or $result.IsHardRebootPending) { return 'Yes' }
+                                    return 'No'
+                                }
+                                finally {
+                                    Remove-CimSession -CimSession $session -ErrorAction SilentlyContinue
+                                }
+                            }
+                            catch {
+                                return 'Unable to Query'
+                            }
+                        }
+
+                        $nested = [powershell]::Create()
+                        [void]$nested.AddScript($checkScript)
+                        [void]$nested.AddArgument($device)
+                        $asyncResult = $nested.BeginInvoke()
+
+                        if ($asyncResult.AsyncWaitHandle.WaitOne(15000)) {
+                            try {
+                                $state = $nested.EndInvoke($asyncResult) | Select-Object -Last 1
+                                if (-not $state) { $state = 'Unable to Query' }
+                            }
+                            catch {
+                                $state = 'Unable to Query'
+                            }
+                        }
+                        else {
+                            $state = 'Unable to Query (timeout)'
+                            try { $nested.Stop() } catch {}
+                        }
+                        try { $nested.Dispose() } catch {}
+
                         $safeDevice = $device -replace '"', ''
                         $payload = '{{"status":"{0}","device":"{1}"}}' -f $state, $safeDevice
                     }
@@ -863,9 +884,11 @@ async function checkOneDevice(btn){
  const cell=btn.closest('.pr-cell');
  btn.disabled=true;
  btn.textContent='Checking…';
+ const controller=new AbortController();
+ const timeoutId=setTimeout(()=>controller.abort(),20000);
  try{
    const url=CHECK_API_BASE+'/check?device='+encodeURIComponent(device)+'&token='+encodeURIComponent(CHECK_TOKEN);
-   const res=await fetch(url,{method:'GET'});
+   const res=await fetch(url,{method:'GET',signal:controller.signal});
    if(!res.ok) throw new Error('HTTP '+res.status);
    const data=await res.json();
    const status=data.status||'Unable to Query';
@@ -874,9 +897,12 @@ async function checkOneDevice(btn){
    else if(status==='No'){cell.innerHTML='<button type="button" class="check-btn result-no" disabled>No</button>';}
    else {cell.innerHTML='<button type="button" class="check-btn result-error" disabled>'+status+'</button>';}
  }catch(err){
+   const label=(err&&err.name==='AbortError')?'No response — retry':'Unavailable — retry';
    cell.dataset.reboot='Unable to Query';
-   cell.innerHTML='<button type="button" class="check-btn result-error" data-device="'+device+'" title="Check service unavailable. Is the SCCM Patch Dashboard app still open?">Unavailable — retry</button>';
+   cell.innerHTML='<button type="button" class="check-btn result-error" data-device="'+device+'" title="Check service unavailable or timed out. Is the SCCM Patch Dashboard app still open?">'+label+'</button>';
    cell.querySelector('button').addEventListener('click',(e)=>checkOneDevice(e.target));
+ }finally{
+   clearTimeout(timeoutId);
  }
  applyFilters();
 }
