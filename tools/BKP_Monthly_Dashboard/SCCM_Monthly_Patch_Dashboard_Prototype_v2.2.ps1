@@ -150,22 +150,60 @@ function Get-SmsProviderData {
         }
     }
 
+    # OS name/build come from hardware inventory (SMS_G_System_OPERATING_SYSTEM), which is
+    # the authoritative source. CombinedDeviceResources' OS-related fields vary between
+    # ConfigMgr versions/sites and are often blank, so we query inventory directly instead.
+    $osMap = @{}
+    $osRowCount = 0
+    for ($i = 0; $i -lt $resourceIds.Count; $i += $batchSize) {
+        $end = [Math]::Min($i + $batchSize - 1, $resourceIds.Count - 1)
+        $ids = ($resourceIds[$i..$end] -join ',')
+        $query = "SELECT ResourceID, Caption00, BuildNumber00, Version00 FROM SMS_G_System_OPERATING_SYSTEM WHERE ResourceID IN ($ids)"
+        try {
+            $osRows = @(Get-CimInstance -ComputerName $ProviderServer -Namespace $namespace `
+                -Query $query -OperationTimeoutSec 180)
+            foreach ($row in $osRows) {
+                $osRowCount++
+                $osMap[[int]$row.ResourceID] = [pscustomobject]@{
+                    Caption     = [string]$row.Caption00
+                    BuildNumber = [string]$row.BuildNumber00
+                    Version     = [string]$row.Version00
+                }
+            }
+        }
+        catch {
+            Write-Log $LogPath "SMS_G_System_OPERATING_SYSTEM batch failed: $($_.Exception.Message)" 'WARN'
+        }
+    }
+    if ($osRowCount -eq 0) {
+        Write-Log $LogPath 'SMS_G_System_OPERATING_SYSTEM returned no rows for any device. OS Name/Build will be blank. This usually means hardware inventory is not enabled/collected for this collection, or the OPERATING_SYSTEM inventory class is disabled in Client Settings.' 'WARN'
+    }
+
     [pscustomobject]@{
         Summary     = $summary
         Assets      = $assets
         ResourceMap = $resourceMap
+        OsMap       = $osMap
     }
+}
+
+function Test-IsSystemAccount {
+    param([string]$UserID)
+    if ([string]::IsNullOrWhiteSpace($UserID)) { return $false }
+    $sam = ($UserID -split '\\')[-1].Trim('(', ')')
+    return $sam -in @('SYSTEM', 'NETWORK SERVICE', 'LOCAL SERVICE', 'ANONYMOUS LOGON')
 }
 
 function Resolve-Upn {
     param(
         [string]$UserID,
         [hashtable]$Cache,
-        [bool]$Enabled
+        [bool]$Enabled,
+        [string]$LogPath
     )
 
     if ([string]::IsNullOrWhiteSpace($UserID)) {
-        return [pscustomobject]@{ UPN = ''; Source = 'Not Resolved' }
+        return [pscustomobject]@{ UPN = ''; Source = 'Not Resolved (no logged-on user)' }
     }
 
     if ($UserID -match '@') {
@@ -183,14 +221,31 @@ function Resolve-Upn {
             }
             $sam = ($UserID -split '\\')[-1]
             $adUser = Get-ADUser -Filter "SamAccountName -eq '$($sam.Replace("'","''"))'" `
-                -Properties UserPrincipalName -ErrorAction Stop | Select-Object -First 1
-            if ($adUser -and $adUser.UserPrincipalName) {
-                $result = [pscustomobject]@{ UPN = [string]$adUser.UserPrincipalName; Source = 'Active Directory' }
+                -Properties UserPrincipalName, Mail -ErrorAction Stop | Select-Object -First 1
+            if ($adUser -and $adUser.Mail) {
+                $result = [pscustomobject]@{ UPN = [string]$adUser.Mail; Source = 'Active Directory (mail)' }
+            }
+            elseif ($adUser -and $adUser.UserPrincipalName) {
+                $result = [pscustomobject]@{ UPN = [string]$adUser.UserPrincipalName; Source = 'Active Directory (login UPN, no mail set)' }
+                if ($LogPath) { Write-Log $LogPath "UPN lookup: AD user '$sam' has no 'mail' attribute; falling back to login UserPrincipalName." 'WARN' }
+            }
+            else {
+                $result = [pscustomobject]@{ UPN = ''; Source = 'Not Resolved (user not found in AD)' }
+                if ($LogPath) { Write-Log $LogPath "UPN lookup: no AD user found for SamAccountName '$sam' (from UserID '$UserID')." 'WARN' }
             }
         }
         catch {
-            $result = [pscustomobject]@{ UPN = ''; Source = 'Not Resolved' }
+            $reason = if ($_.Exception.Message -match 'module|Import-Module') {
+                'AD module unavailable'
+            } else {
+                'AD query error'
+            }
+            $result = [pscustomobject]@{ UPN = ''; Source = "Not Resolved ($reason)" }
+            if ($LogPath) { Write-Log $LogPath "UPN lookup failed for '$UserID': $($_.Exception.Message)" 'WARN' }
         }
+    }
+    else {
+        $result = [pscustomobject]@{ UPN = ''; Source = 'Not Resolved (AD resolution disabled)' }
     }
 
     $Cache[$UserID] = $result
@@ -282,6 +337,7 @@ function Convert-AssetsToRows {
     param(
         [object[]]$Assets,
         [hashtable]$ResourceMap,
+        [hashtable]$OsMap,
         [string]$SiteCode,
         [bool]$ResolveUpnEnabled,
         [bool]$PendingRebootEnabled,
@@ -300,16 +356,17 @@ function Convert-AssetsToRows {
         }
 
         $userId = [string]$asset.UserID
+        if (Test-IsSystemAccount $userId) { $userId = '' }
         if ([string]::IsNullOrWhiteSpace($userId) -and $resource) {
             foreach ($prop in @('CurrentLogonUser','UserName','LastLogonUserName','PrimaryUser')) {
-                if ($resource.PSObject.Properties.Name -contains $prop -and $resource.$prop) {
+                if ($resource.PSObject.Properties.Name -contains $prop -and $resource.$prop -and -not (Test-IsSystemAccount ([string]$resource.$prop))) {
                     $userId = [string]$resource.$prop
                     break
                 }
             }
         }
 
-        $upnResult = Resolve-Upn -UserID $userId -Cache $upnCache -Enabled $ResolveUpnEnabled
+        $upnResult = Resolve-Upn -UserID $userId -Cache $upnCache -Enabled $ResolveUpnEnabled -LogPath $LogPath
         $deviceName = [string]$asset.DeviceName
         $pending = Get-PendingRebootState -ComputerName $deviceName -Enabled $PendingRebootEnabled
 
@@ -364,6 +421,18 @@ function Convert-AssetsToRows {
                     }
                 }
             }
+        }
+
+        # Hardware inventory (SMS_G_System_OPERATING_SYSTEM) is the authoritative source;
+        # it overrides whatever (if anything) CombinedDeviceResources provided above.
+        if ($OsMap -and $OsMap.ContainsKey([int]$asset.ResourceID)) {
+            $osInfo = $OsMap[[int]$asset.ResourceID]
+            if (-not [string]::IsNullOrWhiteSpace($osInfo.Caption)) { $osName = $osInfo.Caption }
+            if (-not [string]::IsNullOrWhiteSpace($osInfo.BuildNumber)) { $osBuild = $osInfo.BuildNumber }
+        }
+
+        if ([string]::IsNullOrWhiteSpace($osName) -and [string]::IsNullOrWhiteSpace($osBuild) -and $LogPath) {
+            Write-Log $LogPath "No OS name/build available for ResourceID $($asset.ResourceID) (device '$deviceName') from inventory or CombinedDeviceResources." 'WARN'
         }
 
         $errorCodeValue = 0
@@ -1212,6 +1281,7 @@ $controls.btnGenerate.Add_Click({
             $rows = Convert-AssetsToRows `
                 -Assets $providerData.Assets `
                 -ResourceMap $providerData.ResourceMap `
+                -OsMap $providerData.OsMap `
                 -SiteCode $siteCode `
                 -ResolveUpnEnabled ([bool]$controls.chkUpn.IsChecked) `
                 -PendingRebootEnabled ([bool]$controls.chkReboot.IsChecked) `

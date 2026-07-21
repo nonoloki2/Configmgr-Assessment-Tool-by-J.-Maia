@@ -153,21 +153,39 @@ function Get-SmsProviderData {
     # OS name/build come from hardware inventory (SMS_G_System_OPERATING_SYSTEM), which is
     # the authoritative source. CombinedDeviceResources' OS-related fields vary between
     # ConfigMgr versions/sites and are often blank, so we query inventory directly instead.
+    # Property suffixes (e.g. Caption00 vs Caption01) vary by inventory report revision, so
+    # we select everything and match property names by prefix instead of hardcoding them.
     $osMap = @{}
     $osRowCount = 0
+    $osPropsLogged = $false
     for ($i = 0; $i -lt $resourceIds.Count; $i += $batchSize) {
         $end = [Math]::Min($i + $batchSize - 1, $resourceIds.Count - 1)
         $ids = ($resourceIds[$i..$end] -join ',')
-        $query = "SELECT ResourceID, Caption00, BuildNumber00, Version00 FROM SMS_G_System_OPERATING_SYSTEM WHERE ResourceID IN ($ids)"
+        $query = "SELECT * FROM SMS_G_System_OPERATING_SYSTEM WHERE ResourceID IN ($ids)"
         try {
             $osRows = @(Get-CimInstance -ComputerName $ProviderServer -Namespace $namespace `
                 -Query $query -OperationTimeoutSec 180)
+
+            if (-not $osPropsLogged -and $osRows.Count -gt 0) {
+                $propNames = ($osRows[0].PSObject.Properties.Name -join ', ')
+                Write-Log $LogPath "SMS_G_System_OPERATING_SYSTEM properties available: $propNames" 'INFO'
+                $osPropsLogged = $true
+            }
+
             foreach ($row in $osRows) {
                 $osRowCount++
+                $caption = ''
+                $build = ''
+                $version = ''
+                foreach ($p in $row.PSObject.Properties) {
+                    if ($p.Name -match '^Caption' -and $p.Value -and -not $caption) { $caption = [string]$p.Value }
+                    elseif ($p.Name -match '^BuildNumber' -and $p.Value -and -not $build) { $build = [string]$p.Value }
+                    elseif ($p.Name -match '^Version' -and $p.Value -and -not $version) { $version = [string]$p.Value }
+                }
                 $osMap[[int]$row.ResourceID] = [pscustomobject]@{
-                    Caption     = [string]$row.Caption00
-                    BuildNumber = [string]$row.BuildNumber00
-                    Version     = [string]$row.Version00
+                    Caption     = $caption
+                    BuildNumber = $build
+                    Version     = $version
                 }
             }
         }
