@@ -835,10 +835,10 @@ $xaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="SCCM Monthly Patch Dashboard - Prototype v2.2"
-        Height="780" Width="1180" MinHeight="700" MinWidth="980"
+        Height="640" Width="1020" MinHeight="600" MinWidth="900"
         WindowStartupLocation="CenterScreen"
         WindowStyle="SingleBorderWindow"
-        ResizeMode="CanResize"
+        ResizeMode="CanMinimize"
         ShowInTaskbar="True"
         Background="#F1F5F9">
     <Grid Margin="20">
@@ -976,19 +976,21 @@ foreach ($name in @(
 $script:AllDeployments = @()
 $script:OutputFolder = Join-Path ([Environment]::GetFolderPath('Desktop')) 'SCCM_Patch_Reports'
 
-# Ao maximizar, reserva uma margem no topo em vez de encostar em Top=0.
-# Isso evita que a janela fique atrás de barras flutuantes de sessao remota
-# (Citrix Receiver/Workspace, CyberArk PSM, etc.), que se ancoram no topo da tela.
-$script:RemoteToolbarTopMargin = 42
-$window.Add_StateChanged({
-    if ($window.WindowState -eq 'Maximized') {
-        $window.WindowState = 'Normal'
-        $workArea = [System.Windows.SystemParameters]::WorkArea
-        $window.Left = $workArea.Left
-        $window.Top = $workArea.Top + $script:RemoteToolbarTopMargin
-        $window.Width = $workArea.Width
-        $window.Height = $workArea.Height - $script:RemoteToolbarTopMargin
-    }
+# A janela e redimensionada em relacao a resolucao reportada pela sessao,
+# deixando margem de seguranca em cima/embaixo. Isso evita depender de
+# WorkArea (que nao enxerga barras flutuantes desenhadas pelo cliente
+# Citrix/CyberArk fora da sessao remota).
+$window.Add_Loaded({
+    $screenHeight = [System.Windows.SystemParameters]::PrimaryScreenHeight
+    $screenWidth  = [System.Windows.SystemParameters]::PrimaryScreenWidth
+    $safeHeight = [Math]::Min($window.Height, [Math]::Floor($screenHeight * 0.80))
+    $safeWidth  = [Math]::Min($window.Width, [Math]::Floor($screenWidth * 0.90))
+    if ($safeHeight -lt $window.MinHeight) { $safeHeight = $window.MinHeight }
+    if ($safeWidth -lt $window.MinWidth) { $safeWidth = $window.MinWidth }
+    $window.Height = $safeHeight
+    $window.Width = $safeWidth
+    $window.Left = [Math]::Max(0, ($screenWidth - $safeWidth) / 2)
+    $window.Top = [Math]::Max(0, ($screenHeight - $safeHeight) * 0.60)
 })
 
 function Update-DeploymentGrid {
