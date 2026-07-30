@@ -1,20 +1,20 @@
-#Requires -Version 5.0
+﻿#Requires -Version 5.0
 <#
     Uninstall String Tool
     ----------------------
-    Busca no Registro do Windows (e, se necessário, na pasta de instalação)
-    a Uninstall String de um programa, e sugere a versão "silenciosa" dela
-    (com base em padrões comuns: MSI /qn, InnoSetup /VERYSILENT, NSIS /S, etc).
+    Busca no Registro do Windows (e, se necessario, na pasta de instalacao)
+    a Uninstall String de um programa, e sugere a versao "silenciosa" dela
+    (com base em padroes comuns: MSI /qn, InnoSetup /VERYSILENT, NSIS /S, etc).
 
-    Uso: clique com o botão direito -> "Executar com PowerShell"
-    (pode ser necessário rodar como Administrador para ver todos os programas)
+    Uso: clique com o botao direito -> "Executar com PowerShell"
+    (pode ser necessario rodar como Administrador para ver todos os programas)
 #>
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
 # ----------------------------------------------------------------------
-# Funções auxiliares
+# Funcoes auxiliares
 # ----------------------------------------------------------------------
 
 function Get-InstalledPrograms {
@@ -47,7 +47,7 @@ function Get-SilentSuggestion {
         return "msiexec.exe /x $guid /qn /norestart"
     }
 
-    # Já contém switches conhecidos de silencioso
+    # Ja contem switches conhecidos de silencioso
     $knownSilent = @('/S', '/silent', '/verysilent', '/qn', '/quiet', '-silent', '--silent')
     foreach ($sw in $knownSilent) {
         if ($us -match [regex]::Escape($sw)) {
@@ -55,7 +55,7 @@ function Get-SilentSuggestion {
         }
     }
 
-    # Extrai o executável entre aspas ou até o primeiro espaço
+    # Extrai o executavel entre aspas ou ate o primeiro espaco
     $exePath = $null
     if ($us -match '^\s*"([^"]+)"') {
         $exePath = $Matches[1]
@@ -63,16 +63,16 @@ function Get-SilentSuggestion {
         $exePath = $Matches[1]
     }
 
-    if (-not $exePath) { return "$us  (não foi possível identificar padrão silencioso)" }
+    if (-not $exePath) { return ($us + '  (nao foi possivel identificar padrao silencioso)') }
 
     $exeName = [IO.Path]::GetFileName($exePath).ToLower()
 
-    # Heurísticas por instalador comum
+    # Heuristicas por instalador comum
     switch -Regex ($exeName) {
-        'unins\d*\.exe'      { return "`"$exePath`" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART" } # Inno Setup
-        'uninstall\.exe'     { return "`"$exePath`" /S" }                                        # NSIS (comum)
-        'setup\.exe'         { return "`"$exePath`" /S" }
-        default               { return "`"$exePath`" /S   (heurística genérica — confira com /? ou /help)" }
+        'unins\d*\.exe'  { return ('"' + $exePath + '" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART') } # Inno Setup
+        'uninstall\.exe' { return ('"' + $exePath + '" /S') }                                        # NSIS (comum)
+        'setup\.exe'     { return ('"' + $exePath + '" /S') }
+        default          { return ('"' + $exePath + '" /S   (heuristica generica - confira com /? ou /help)') }
     }
 }
 
@@ -86,7 +86,7 @@ function Search-InstallFolder {
 }
 
 # ----------------------------------------------------------------------
-# Interface Gráfica
+# Interface Grafica
 # ----------------------------------------------------------------------
 
 $form = New-Object System.Windows.Forms.Form
@@ -145,7 +145,7 @@ $txtDetails.Anchor = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windo
 $form.Controls.Add($txtDetails)
 
 $lblSilent = New-Object System.Windows.Forms.Label
-$lblSilent.Text = "Sugestão de comando silencioso:"
+$lblSilent.Text = "Sugestao de comando silencioso:"
 $lblSilent.Location = New-Object System.Drawing.Point(15, 368)
 $lblSilent.AutoSize = $true
 $form.Controls.Add($lblSilent)
@@ -171,7 +171,7 @@ $statusStrip.Items.Add($statusLabel) | Out-Null
 $form.Controls.Add($statusStrip)
 
 $note = New-Object System.Windows.Forms.Label
-$note.Text = "Dica: rode como Administrador para enxergar todos os programas instalados (inclusive de outros usuários)."
+$note.Text = "Dica: rode como Administrador para enxergar todos os programas instalados (inclusive de outros usuarios)."
 $note.Location = New-Object System.Drawing.Point(15, 425)
 $note.Size = New-Object System.Drawing.Size(725, 40)
 $note.ForeColor = [System.Drawing.Color]::DimGray
@@ -205,7 +205,7 @@ $btnSearch.Add_Click({
     if (-not $programs) {
         $statusLabel.Text = "Nenhum programa encontrado no registro para '$term'."
         [System.Windows.Forms.MessageBox]::Show(
-            "Nenhum programa encontrado no registro com esse nome.`nTente usar o botão 'Buscar em pasta...' para procurar um executável de desinstalação manualmente.",
+            "Nenhum programa encontrado no registro com esse nome.`nTente usar o botao 'Buscar em pasta...' para procurar um executavel de desinstalacao manualmente.",
             "Uninstall String Tool", "OK", "Information") | Out-Null
         return
     }
@@ -232,9 +232,9 @@ $lstResults.Add_SelectedIndexChanged({
 
     $details = @()
     $details += "Nome:              $($p.DisplayName)"
-    if ($p.DisplayVersion) { $details += "Versão:            $($p.DisplayVersion)" }
+    if ($p.DisplayVersion) { $details += "Versao:            $($p.DisplayVersion)" }
     if ($p.Publisher)      { $details += "Fabricante:        $($p.Publisher)" }
-    if ($installLoc)       { $details += "Pasta instalação:  $installLoc" }
+    if ($installLoc)       { $details += "Pasta instalacao:  $installLoc" }
     $details += ""
     $details += "UninstallString:       $uninstallStr"
     if ($quietStr) { $details += "QuietUninstallString: $quietStr" }
@@ -242,7 +242,7 @@ $lstResults.Add_SelectedIndexChanged({
     $txtDetails.Text = $details -join "`r`n"
 
     if ($quietStr) {
-        # o próprio fabricante já forneceu a versão silenciosa
+        # o proprio fabricante ja forneceu a versao silenciosa
         $txtSilent.Text = $quietStr
     } else {
         $txtSilent.Text = Get-SilentSuggestion -UninstallString $uninstallStr
@@ -251,18 +251,18 @@ $lstResults.Add_SelectedIndexChanged({
 
 $btnFolder.Add_Click({
     $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
-    $dlg.Description = "Selecione a pasta onde o programa está instalado"
+    $dlg.Description = "Selecione a pasta onde o programa esta instalado"
     if ($dlg.ShowDialog() -ne "OK") { return }
 
-    $statusLabel.Text = "Buscando executáveis de desinstalação na pasta..."
+    $statusLabel.Text = "Buscando executaveis de desinstalacao na pasta..."
     $form.Refresh()
 
     $found = Search-InstallFolder -FolderPath $dlg.SelectedPath
 
     if (-not $found) {
-        $statusLabel.Text = "Nenhum executável de desinstalação encontrado nessa pasta."
+        $statusLabel.Text = "Nenhum executavel de desinstalacao encontrado nessa pasta."
         [System.Windows.Forms.MessageBox]::Show(
-            "Não foi encontrado nenhum unins*.exe, uninstall*.exe ou setup.exe nessa pasta.",
+            "Nao foi encontrado nenhum unins*.exe, uninstall*.exe ou setup.exe nessa pasta.",
             "Uninstall String Tool", "OK", "Warning") | Out-Null
         return
     }
@@ -273,7 +273,7 @@ $btnFolder.Add_Click({
     foreach ($exe in $found) {
         $label = $exe
         $lstResults.Items.Add($label) | Out-Null
-        # cria um "objeto fake" só com UninstallString para reaproveitar a lógica de sugestão
+        # cria um "objeto fake" so com UninstallString para reaproveitar a logica de sugestao
         $script:currentResults[$label] = [PSCustomObject]@{
             DisplayName          = [IO.Path]::GetFileName($exe)
             DisplayVersion       = $null
@@ -284,13 +284,13 @@ $btnFolder.Add_Click({
         }
     }
 
-    $statusLabel.Text = "$($found.Count) executável(is) encontrado(s) na pasta."
+    $statusLabel.Text = "$($found.Count) executavel(is) encontrado(s) na pasta."
 })
 
 $btnCopy.Add_Click({
     if ($txtSilent.Text) {
         [System.Windows.Forms.Clipboard]::SetText($txtSilent.Text)
-        $statusLabel.Text = "Comando copiado para a área de transferência."
+        $statusLabel.Text = "Comando copiado para a area de transferencia."
     }
 })
 
