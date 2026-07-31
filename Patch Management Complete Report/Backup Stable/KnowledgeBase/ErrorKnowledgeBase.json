@@ -1,0 +1,1016 @@
+{
+  "schemaVersion": 1,
+  "knowledgeBaseVersion": "2026.07.23.1",
+  "generatedAt": "2026-07-23T00:00:00Z",
+  "offlineOnly": true,
+  "errors": {
+    "0x8024402F": {
+      "category": "Windows Update / Web Filtering",
+      "description": "External CAB processing completed with errors. Web-filtering software can alter or block update responses.",
+      "confidence": "High",
+      "recommendations": [
+        {
+          "priority": 1,
+          "action": "Confirm that web filtering or SSL inspection is not modifying Windows Update, WSUS, SUP, or content-download traffic."
+        },
+        {
+          "priority": 2,
+          "action": "Add the affected device or required update endpoints to the approved exception list, according to the organization network policy."
+        },
+        {
+          "priority": 3,
+          "action": "Retry the scan and review WindowsUpdate.log and WUAHandler.log for the same code."
+        }
+      ],
+      "source": {
+        "type": "MicrosoftOfficial",
+        "title": "Windows Update common errors and mitigation",
+        "url": "https://learn.microsoft.com/en-us/troubleshoot/windows-client/installing-updates-features-roles/common-windows-update-errors"
+      }
+    },
+    "0x80242006": {
+      "category": "Windows Update Metadata",
+      "description": "The update handler could not complete because the update metadata is invalid.",
+      "confidence": "High",
+      "recommendations": [
+        {
+          "priority": 1,
+          "action": "Redownload the update content and verify that the deployment package content is healthy on the Distribution Point."
+        },
+        {
+          "priority": 2,
+          "action": "Review WUAHandler.log, WindowsUpdate.log, CAS.log, and ContentTransferManager.log before resetting any local cache."
+        },
+        {
+          "priority": 3,
+          "action": "If corruption is confirmed, rename the Windows Update datastore/download folders and Catroot2 during a controlled maintenance window, then rescan."
+        }
+      ],
+      "source": {
+        "type": "MicrosoftOfficial",
+        "title": "Windows Update common errors and mitigation",
+        "url": "https://learn.microsoft.com/en-us/troubleshoot/windows-client/installing-updates-features-roles/common-windows-update-errors"
+      }
+    },
+    "0x80070BC9": {
+      "category": "Restart / Servicing",
+      "description": "The requested operation failed because a restart is required to complete or roll back servicing changes.",
+      "confidence": "High",
+      "recommendations": [
+        {
+          "priority": 1,
+          "action": "Restart the device and allow pending servicing operations to finish before triggering another update evaluation."
+        },
+        {
+          "priority": 2,
+          "action": "Confirm that Windows Installer and TrustedInstaller startup behavior is not being forced incorrectly by Group Policy."
+        },
+        {
+          "priority": 3,
+          "action": "If the condition persists after restart, review CBS.log and pending servicing state before considering offline recovery actions."
+        }
+      ],
+      "source": {
+        "type": "MicrosoftOfficial",
+        "title": "Windows Update common errors and mitigation",
+        "url": "https://learn.microsoft.com/en-us/troubleshoot/windows-client/installing-updates-features-roles/common-windows-update-errors"
+      }
+    },
+    "0x80200053": {
+      "category": "BITS / Content Validation",
+      "description": "BITS validation failed, potentially because a firewall or content filter altered the downloaded response.",
+      "confidence": "High",
+      "recommendations": [
+        {
+          "priority": 1,
+          "action": "Validate that firewall, proxy, antivirus, or SSL inspection is not changing update content in transit."
+        },
+        {
+          "priority": 2,
+          "action": "Check BITS jobs and review DataTransferService.log and ContentTransferManager.log for the failed file or URL."
+        },
+        {
+          "priority": 3,
+          "action": "Retry the content download after confirming connectivity to the assigned Distribution Point or update source."
+        }
+      ],
+      "source": {
+        "type": "MicrosoftOfficial",
+        "title": "Windows Update common errors and mitigation",
+        "url": "https://learn.microsoft.com/en-us/troubleshoot/windows-client/installing-updates-features-roles/common-windows-update-errors"
+      }
+    },
+    "0x80072EFD": {
+      "category": "Connectivity / Timeout",
+      "description": "The update operation timed out or could not establish a connection to the update source.",
+      "confidence": "High",
+      "recommendations": [
+        {
+          "priority": 1,
+          "action": "Validate connectivity from the device to its configured WSUS/SUP and assigned Distribution Point."
+        },
+        {
+          "priority": 2,
+          "action": "Check proxy and firewall rules for blocked update or content URLs."
+        },
+        {
+          "priority": 3,
+          "action": "Review WindowsUpdate.log, WUAHandler.log, LocationServices.log, and network traces for the failed endpoint."
+        }
+      ],
+      "source": {
+        "type": "MicrosoftOfficial",
+        "title": "Windows Update common errors and mitigation",
+        "url": "https://learn.microsoft.com/en-us/troubleshoot/windows-client/installing-updates-features-roles/common-windows-update-errors"
+      }
+    },
+    "0x80072EFE": {
+      "category": "Connectivity / BITS",
+      "description": "The connection to the server was closed abnormally while transferring update content.",
+      "confidence": "High",
+      "recommendations": [
+        {
+          "priority": 1,
+          "action": "Inspect active BITS jobs and identify the HTTP status and file associated with the failure."
+        },
+        {
+          "priority": 2,
+          "action": "Validate proxy and network access to the configured WSUS/SUP or Distribution Point using the organization proxy settings."
+        },
+        {
+          "priority": 3,
+          "action": "Review DataTransferService.log, ContentTransferManager.log, and WindowsUpdate.log for repeated connection resets."
+        }
+      ],
+      "source": {
+        "type": "MicrosoftOfficial",
+        "title": "Windows Update common errors and mitigation",
+        "url": "https://learn.microsoft.com/en-us/troubleshoot/windows-client/installing-updates-features-roles/common-windows-update-errors"
+      }
+    },
+    "0x80D02002": {
+      "category": "Delivery Optimization / Timeout",
+      "description": "The download operation made no progress within the defined period.",
+      "confidence": "High",
+      "recommendations": [
+        {
+          "priority": 1,
+          "action": "Confirm that the required update content is distributed and available on the device assigned Distribution Point."
+        },
+        {
+          "priority": 2,
+          "action": "Validate Delivery Optimization, BITS, proxy, firewall, and network connectivity to the content source."
+        },
+        {
+          "priority": 3,
+          "action": "Review CAS.log, LocationServices.log, ContentTransferManager.log, DataTransferService.log, and Delivery Optimization event logs."
+        }
+      ],
+      "source": {
+        "type": "MicrosoftOfficial",
+        "title": "Windows Update common errors and mitigation",
+        "url": "https://learn.microsoft.com/en-us/troubleshoot/windows-client/installing-updates-features-roles/common-windows-update-errors"
+      }
+    },
+    "0x8007000D": {
+      "category": "Downloaded Data / Corruption",
+      "description": "Invalid or corrupted data was downloaded.",
+      "confidence": "High",
+      "recommendations": [
+        {
+          "priority": 1,
+          "action": "Redownload the update and confirm that the deployment package content is healthy on the Distribution Point."
+        },
+        {
+          "priority": 2,
+          "action": "Review CAS.log, ContentTransferManager.log, DataTransferService.log, and CBS.log for corruption or hash-validation evidence."
+        },
+        {
+          "priority": 3,
+          "action": "If repeated across multiple devices, validate or redistribute the SCCM deployment package content."
+        }
+      ],
+      "source": {
+        "type": "MicrosoftOfficial",
+        "title": "Windows Update common errors and mitigation",
+        "url": "https://learn.microsoft.com/en-us/troubleshoot/windows-client/installing-updates-features-roles/common-windows-update-errors"
+      }
+    },
+    "0x8024A10A": {
+      "category": "Windows Update Service",
+      "description": "The Windows Update service is shutting down, commonly after inactivity or a lost connection.",
+      "confidence": "High",
+      "recommendations": [
+        {
+          "priority": 1,
+          "action": "Keep the device online and active long enough for the update scan and installation to complete."
+        },
+        {
+          "priority": 2,
+          "action": "Confirm that Windows Update, BITS, and CCMExec services remain running during evaluation."
+        },
+        {
+          "priority": 3,
+          "action": "Review WUAHandler.log and WindowsUpdate.log for service shutdown or connection-loss events."
+        }
+      ],
+      "source": {
+        "type": "MicrosoftOfficial",
+        "title": "Windows Update common errors and mitigation",
+        "url": "https://learn.microsoft.com/en-us/troubleshoot/windows-client/installing-updates-features-roles/common-windows-update-errors"
+      }
+    },
+    "0x80240020": {
+      "category": "Interactive User Requirement",
+      "description": "The operation did not complete because no interactive user was signed in.",
+      "confidence": "High",
+      "recommendations": [
+        {
+          "priority": 1,
+          "action": "Confirm whether the update or installer genuinely requires an interactive user session."
+        },
+        {
+          "priority": 2,
+          "action": "Review deployment user-experience settings and ensure the update can run in the intended system context."
+        },
+        {
+          "priority": 3,
+          "action": "Sign in during a controlled test and review UpdatesDeployment.log and WindowsUpdate.log to confirm the requirement."
+        }
+      ],
+      "source": {
+        "type": "MicrosoftOfficial",
+        "title": "Windows Update common errors and mitigation",
+        "url": "https://learn.microsoft.com/en-us/troubleshoot/windows-client/installing-updates-features-roles/common-windows-update-errors"
+      }
+    },
+    "0x80242014": {
+      "category": "Restart / Post-Reboot",
+      "description": "The post-restart update operation is still pending.",
+      "confidence": "High",
+      "recommendations": [
+        {
+          "priority": 1,
+          "action": "Restart the device and allow Windows servicing to finish before forcing another evaluation."
+        },
+        {
+          "priority": 2,
+          "action": "Confirm the device is not repeatedly interrupted or shut down during post-reboot processing."
+        },
+        {
+          "priority": 3,
+          "action": "Review RebootCoordinator.log, UpdatesDeployment.log, and CBS.log after the restart."
+        }
+      ],
+      "source": {
+        "type": "MicrosoftOfficial",
+        "title": "Windows Update common errors and mitigation",
+        "url": "https://learn.microsoft.com/en-us/troubleshoot/windows-client/installing-updates-features-roles/common-windows-update-errors"
+      }
+    },
+    "0x80246017": {
+      "category": "Authorization",
+      "description": "The local user was not authorized to download or install the update.",
+      "confidence": "High",
+      "recommendations": [
+        {
+          "priority": 1,
+          "action": "Confirm that the deployment runs in the required system or administrative context."
+        },
+        {
+          "priority": 2,
+          "action": "Validate local policy and permissions affecting Windows Update and content-download locations."
+        },
+        {
+          "priority": 3,
+          "action": "Review WUAHandler.log and WindowsUpdate.log for the exact authorization failure."
+        }
+      ],
+      "source": {
+        "type": "MicrosoftOfficial",
+        "title": "Windows Update common errors and mitigation",
+        "url": "https://learn.microsoft.com/en-us/troubleshoot/windows-client/installing-updates-features-roles/common-windows-update-errors"
+      }
+    },
+    "0x8024000B": {
+      "category": "Windows Update Operation",
+      "description": "The operation was canceled by the user or a service.",
+      "confidence": "High",
+      "recommendations": [
+        {
+          "priority": 1,
+          "action": "Identify whether the deployment, client service, restart, or user action canceled the operation."
+        },
+        {
+          "priority": 2,
+          "action": "Review UpdatesDeployment.log, WUAHandler.log, and WindowsUpdate.log around the last status time."
+        },
+        {
+          "priority": 3,
+          "action": "Retry the evaluation only after eliminating the cancellation trigger."
+        }
+      ],
+      "source": {
+        "type": "MicrosoftOfficial",
+        "title": "Windows Update common errors and mitigation",
+        "url": "https://learn.microsoft.com/en-us/troubleshoot/windows-client/installing-updates-features-roles/common-windows-update-errors"
+      }
+    },
+    "0x8024000E": {
+      "category": "Windows Update Metadata",
+      "description": "Windows Update Agent found invalid XML data in update metadata.",
+      "confidence": "High",
+      "recommendations": [
+        {
+          "priority": 1,
+          "action": "Confirm that the Windows Update Agent and current servicing stack are up to date."
+        },
+        {
+          "priority": 2,
+          "action": "Review WindowsUpdate.log and WUAHandler.log to identify the update or driver with invalid metadata."
+        },
+        {
+          "priority": 3,
+          "action": "Validate WSUS/SUP synchronization health and decline or correct malformed third-party update metadata if applicable."
+        }
+      ],
+      "source": {
+        "type": "MicrosoftOfficial",
+        "title": "Windows Update common errors and mitigation",
+        "url": "https://learn.microsoft.com/en-us/troubleshoot/windows-client/installing-updates-features-roles/common-windows-update-errors"
+      }
+    },
+    "0x8024D009": {
+      "category": "Windows Update Agent / WSUS",
+      "description": "A Windows Update Agent self-update was skipped by directive, potentially because WSUS did not provide the required self-update.",
+      "confidence": "High",
+      "recommendations": [
+        {
+          "priority": 1,
+          "action": "Validate WSUS/SUP configuration and client access to the WSUS self-update path."
+        },
+        {
+          "priority": 2,
+          "action": "Confirm that the client is using the intended WSUS/SUP policy and can reach the configured server."
+        },
+        {
+          "priority": 3,
+          "action": "Review WindowsUpdate.log, WUAHandler.log, and WSUS/IIS logs for self-update failures."
+        }
+      ],
+      "source": {
+        "type": "MicrosoftOfficial",
+        "title": "Windows Update common errors and mitigation",
+        "url": "https://learn.microsoft.com/en-us/troubleshoot/windows-client/installing-updates-features-roles/common-windows-update-errors"
+      }
+    },
+    "0x80244007": {
+      "category": "WSUS / SOAP",
+      "description": "The Windows Update SOAP client failed, often because update cookies could not be renewed.",
+      "confidence": "High",
+      "recommendations": [
+        {
+          "priority": 1,
+          "action": "Validate communication with the configured WSUS/SUP and review IIS and WSUS health."
+        },
+        {
+          "priority": 2,
+          "action": "Check WindowsUpdate.log and WUAHandler.log for cookie, SOAP, or server-response details."
+        },
+        {
+          "priority": 3,
+          "action": "Confirm that proxy, SSL inspection, and authentication are not interfering with WSUS communication."
+        }
+      ],
+      "source": {
+        "type": "MicrosoftOfficial",
+        "title": "Windows Update common errors and mitigation",
+        "url": "https://learn.microsoft.com/en-us/troubleshoot/windows-client/installing-updates-features-roles/common-windows-update-errors"
+      }
+    },
+    "0x80070422": {
+      "category": "Windows Update Service",
+      "description": "The Windows Update service is disabled or not running.",
+      "confidence": "High",
+      "recommendations": [
+        {
+          "priority": 1,
+          "action": "Check that the Windows Update service is enabled and running with the organization approved startup configuration."
+        },
+        {
+          "priority": 2,
+          "action": "Identify any Group Policy, security baseline, or remediation that repeatedly disables the service."
+        },
+        {
+          "priority": 3,
+          "action": "Restart the service, trigger a software update scan, and review WUAHandler.log and WindowsUpdate.log."
+        }
+      ],
+      "source": {
+        "type": "MicrosoftOfficial",
+        "title": "Windows Update common errors and mitigation",
+        "url": "https://learn.microsoft.com/en-us/troubleshoot/windows-client/installing-updates-features-roles/common-windows-update-errors"
+      }
+    },
+    "0x800F0821": {
+      "category": "Servicing Timeout",
+      "description": "The CBS servicing transaction exceeded its watchdog timeout.",
+      "confidence": "High",
+      "recommendations": [
+        {
+          "priority": 1,
+          "action": "Allow additional time and ensure the device has sufficient CPU, memory, and disk resources for servicing."
+        },
+        {
+          "priority": 2,
+          "action": "Review CBS.log and DISM.log for the component or operation that stopped progressing."
+        },
+        {
+          "priority": 3,
+          "action": "For virtual machines, validate resource contention before retrying the update."
+        }
+      ],
+      "source": {
+        "type": "MicrosoftOfficial",
+        "title": "Windows Update common errors and mitigation",
+        "url": "https://learn.microsoft.com/en-us/troubleshoot/windows-client/installing-updates-features-roles/common-windows-update-errors"
+      }
+    },
+    "0x800F0825": {
+      "category": "Component Store",
+      "description": "A package cannot be uninstalled, commonly because the component store is partially installed or corrupted.",
+      "confidence": "High",
+      "recommendations": [
+        {
+          "priority": 1,
+          "action": "Run DISM /Online /Cleanup-Image /RestoreHealth from an elevated prompt and review DISM.log."
+        },
+        {
+          "priority": 2,
+          "action": "Run SFC /Scannow after DISM completes, then restart the device."
+        },
+        {
+          "priority": 3,
+          "action": "If repair fails, identify the missing payload in CBS.log and use a matching repair source."
+        }
+      ],
+      "source": {
+        "type": "MicrosoftOfficial",
+        "title": "Windows Update common errors and mitigation",
+        "url": "https://learn.microsoft.com/en-us/troubleshoot/windows-client/installing-updates-features-roles/common-windows-update-errors"
+      }
+    },
+    "0x800F0920": {
+      "category": "Servicing Timeout",
+      "description": "Windows servicing detected that an operation stopped responding.",
+      "confidence": "High",
+      "recommendations": [
+        {
+          "priority": 1,
+          "action": "Ensure sufficient CPU, memory, disk space, and uninterrupted runtime for the servicing operation."
+        },
+        {
+          "priority": 2,
+          "action": "Review CBS.log and DISM.log to identify the package or phase that stopped responding."
+        },
+        {
+          "priority": 3,
+          "action": "For virtual machines, resolve resource contention before retrying."
+        }
+      ],
+      "source": {
+        "type": "MicrosoftOfficial",
+        "title": "Windows Update common errors and mitigation",
+        "url": "https://learn.microsoft.com/en-us/troubleshoot/windows-client/installing-updates-features-roles/common-windows-update-errors"
+      }
+    },
+    "0x800F081F": {
+      "category": "Component Store / Missing Source",
+      "description": "The source files required for component-store repair or update installation could not be found.",
+      "confidence": "High",
+      "recommendations": [
+        {
+          "priority": 1,
+          "action": "Run DISM /Online /Cleanup-Image /RestoreHealth and review DISM.log for the exact missing source."
+        },
+        {
+          "priority": 2,
+          "action": "If online repair is restricted, provide a repair source that exactly matches the installed Windows version, edition, language, and patch level."
+        },
+        {
+          "priority": 3,
+          "action": "Run SFC /Scannow after DISM succeeds, restart the device, and retry the update."
+        }
+      ],
+      "source": {
+        "type": "MicrosoftOfficial",
+        "title": "Windows Update common errors and mitigation",
+        "url": "https://learn.microsoft.com/en-us/troubleshoot/windows-client/installing-updates-features-roles/common-windows-update-errors"
+      }
+    },
+    "0x800F0831": {
+      "category": "Component Store Corruption",
+      "description": "The Windows component store is corrupted or has a partially installed component.",
+      "confidence": "High",
+      "recommendations": [
+        {
+          "priority": 1,
+          "action": "Run DISM /Online /Cleanup-Image /RestoreHealth and review DISM.log and CBS.log."
+        },
+        {
+          "priority": 2,
+          "action": "Run SFC /Scannow after DISM completes, then restart the device."
+        },
+        {
+          "priority": 3,
+          "action": "If repair fails, identify the missing package dependency and use a matching repair source."
+        }
+      ],
+      "source": {
+        "type": "MicrosoftOfficial",
+        "title": "Windows Update common errors and mitigation",
+        "url": "https://learn.microsoft.com/en-us/troubleshoot/windows-client/installing-updates-features-roles/common-windows-update-errors"
+      }
+    },
+    "0x80070005": {
+      "category": "Permissions / Access Denied",
+      "description": "The servicing stack was denied access to a required file, folder, or registry key.",
+      "confidence": "High",
+      "recommendations": [
+        {
+          "priority": 1,
+          "action": "Review the latest CBS.log around the failure timestamp and identify the exact object returning access denied."
+        },
+        {
+          "priority": 2,
+          "action": "Validate whether antivirus, endpoint protection, hardening, or modified ACLs are blocking the servicing stack."
+        },
+        {
+          "priority": 3,
+          "action": "Correct only the affected permission according to the expected Windows default, then retry the update."
+        }
+      ],
+      "source": {
+        "type": "MicrosoftOfficial",
+        "title": "Windows Update common errors and mitigation",
+        "url": "https://learn.microsoft.com/en-us/troubleshoot/windows-client/installing-updates-features-roles/common-windows-update-errors"
+      }
+    },
+    "0x80070570": {
+      "category": "File or Component Store Corruption",
+      "description": "A required file or directory is corrupted and unreadable.",
+      "confidence": "High",
+      "recommendations": [
+        {
+          "priority": 1,
+          "action": "Run DISM /Online /Cleanup-Image /RestoreHealth and review DISM.log and CBS.log."
+        },
+        {
+          "priority": 2,
+          "action": "Run SFC /Scannow and check disk health if file corruption is suspected."
+        },
+        {
+          "priority": 3,
+          "action": "Restart the device after repair and retry the update."
+        }
+      ],
+      "source": {
+        "type": "MicrosoftOfficial",
+        "title": "Windows Update common errors and mitigation",
+        "url": "https://learn.microsoft.com/en-us/troubleshoot/windows-client/installing-updates-features-roles/common-windows-update-errors"
+      }
+    },
+    "0x80070003": {
+      "category": "Path Not Found",
+      "description": "The servicing stack could not access a required path or executable.",
+      "confidence": "High",
+      "recommendations": [
+        {
+          "priority": 1,
+          "action": "Review CBS.log around the failure timestamp to identify the missing path."
+        },
+        {
+          "priority": 2,
+          "action": "Validate that security software, cleanup tasks, or a previous failed update did not remove the required file or directory."
+        },
+        {
+          "priority": 3,
+          "action": "Repair the component store or restore the exact missing component before retrying."
+        }
+      ],
+      "source": {
+        "type": "MicrosoftOfficial",
+        "title": "Windows Update common errors and mitigation",
+        "url": "https://learn.microsoft.com/en-us/troubleshoot/windows-client/installing-updates-features-roles/common-windows-update-errors"
+      }
+    },
+    "0x80070020": {
+      "category": "File Sharing Violation",
+      "description": "A required file is in use, commonly because a non-Microsoft filter driver or security product is holding it.",
+      "confidence": "High",
+      "recommendations": [
+        {
+          "priority": 1,
+          "action": "Review CBS.log to identify the file involved in the sharing violation."
+        },
+        {
+          "priority": 2,
+          "action": "Use a controlled clean boot or Process Monitor capture to identify the process or filter driver holding the file."
+        },
+        {
+          "priority": 3,
+          "action": "Retry the update only after the conflicting process is safely stopped or remediated."
+        }
+      ],
+      "source": {
+        "type": "MicrosoftOfficial",
+        "title": "Windows Update common errors and mitigation",
+        "url": "https://learn.microsoft.com/en-us/troubleshoot/windows-client/installing-updates-features-roles/common-windows-update-errors"
+      }
+    },
+    "0x80073701": {
+      "category": "Component Store / Missing Assembly",
+      "description": "A referenced side-by-side assembly could not be found.",
+      "confidence": "High",
+      "recommendations": [
+        {
+          "priority": 1,
+          "action": "Run DISM /Online /Cleanup-Image /RestoreHealth and review DISM.log and CBS.log."
+        },
+        {
+          "priority": 2,
+          "action": "Run SFC /Scannow, restart the device, and retry the update."
+        },
+        {
+          "priority": 3,
+          "action": "If the assembly remains missing, use a matching repair source or repair the identified package dependency."
+        }
+      ],
+      "source": {
+        "type": "MicrosoftOfficial",
+        "title": "Windows Update common errors and mitigation",
+        "url": "https://learn.microsoft.com/en-us/troubleshoot/windows-client/installing-updates-features-roles/common-windows-update-errors"
+      }
+    },
+    "0x8007371B": {
+      "category": "Component Store Transaction",
+      "description": "A component-store transaction is incomplete because required members are missing.",
+      "confidence": "High",
+      "recommendations": [
+        {
+          "priority": 1,
+          "action": "Run DISM /Online /Cleanup-Image /RestoreHealth and review DISM.log and CBS.log."
+        },
+        {
+          "priority": 2,
+          "action": "Run SFC /Scannow, restart the device, and retry the update."
+        },
+        {
+          "priority": 3,
+          "action": "If repair fails, identify the incomplete package transaction in CBS.log and use a matching repair source."
+        }
+      ],
+      "source": {
+        "type": "MicrosoftOfficial",
+        "title": "Windows Update common errors and mitigation",
+        "url": "https://learn.microsoft.com/en-us/troubleshoot/windows-client/installing-updates-features-roles/common-windows-update-errors"
+      }
+    },
+    "0x80072F8F": {
+      "category": "TLS / Content Decoding",
+      "description": "Windows Update could not decode the received content, commonly because TLS 1.2 is not configured correctly.",
+      "confidence": "High",
+      "recommendations": [
+        {
+          "priority": 1,
+          "action": "Validate TLS 1.2 configuration for WinHTTP and the Windows Update Agent."
+        },
+        {
+          "priority": 2,
+          "action": "Confirm certificate trust, system date/time, proxy inspection, and secure connectivity to WSUS/SUP."
+        },
+        {
+          "priority": 3,
+          "action": "Review WindowsUpdate.log, Schannel events, and WUAHandler.log for TLS or decoding failures."
+        }
+      ],
+      "source": {
+        "type": "MicrosoftOfficial",
+        "title": "Windows Update common errors and mitigation",
+        "url": "https://learn.microsoft.com/en-us/troubleshoot/windows-client/installing-updates-features-roles/common-windows-update-errors"
+      }
+    },
+    "0x80072EE2": {
+      "category": "Connectivity / Timeout",
+      "description": "Windows Update Agent timed out while connecting to Windows Update, Configuration Manager, WSUS, or another update source.",
+      "confidence": "High",
+      "recommendations": [
+        {
+          "priority": 1,
+          "action": "Validate connectivity to the configured WSUS/SUP and, for content, the assigned Distribution Point."
+        },
+        {
+          "priority": 2,
+          "action": "Check proxy, firewall, DNS, certificate, and network routing for the update-source FQDN."
+        },
+        {
+          "priority": 3,
+          "action": "Review WindowsUpdate.log, WUAHandler.log, LocationServices.log, and IIS/WSUS logs."
+        }
+      ],
+      "source": {
+        "type": "MicrosoftOfficial",
+        "title": "Windows Update common errors and mitigation",
+        "url": "https://learn.microsoft.com/en-us/troubleshoot/windows-client/installing-updates-features-roles/common-windows-update-errors"
+      }
+    },
+    "0x80240022": {
+      "category": "Windows Update / Multiple Failures",
+      "description": "The operation failed for all updates; antivirus or another filter may be blocking required update folders.",
+      "confidence": "High",
+      "recommendations": [
+        {
+          "priority": 1,
+          "action": "Review CBS.log and WindowsUpdate.log to identify the first concrete failure rather than treating this aggregate code as the root cause."
+        },
+        {
+          "priority": 2,
+          "action": "Validate whether antivirus or endpoint protection is blocking SoftwareDistribution, Catroot2, WinSxS, or servicing operations."
+        },
+        {
+          "priority": 3,
+          "action": "Retry only after the underlying file, folder, or servicing failure is identified and corrected."
+        }
+      ],
+      "source": {
+        "type": "MicrosoftOfficial",
+        "title": "Windows Update common errors and mitigation",
+        "url": "https://learn.microsoft.com/en-us/troubleshoot/windows-client/installing-updates-features-roles/common-windows-update-errors"
+      }
+    },
+    "0x8024401B": {
+      "category": "Proxy Authentication",
+      "description": "The update source returned HTTP 407 because proxy authentication is required.",
+      "confidence": "High",
+      "recommendations": [
+        {
+          "priority": 1,
+          "action": "Validate WinHTTP proxy configuration used by Windows Update and ensure the update-source FQDN is reachable."
+        },
+        {
+          "priority": 2,
+          "action": "Confirm with the network team that WSUS/SUP traffic does not require interactive user authentication."
+        },
+        {
+          "priority": 3,
+          "action": "Review WindowsUpdate.log and WUAHandler.log for the proxy endpoint and authentication response."
+        }
+      ],
+      "source": {
+        "type": "MicrosoftOfficial",
+        "title": "Windows Update common errors and mitigation",
+        "url": "https://learn.microsoft.com/en-us/troubleshoot/windows-client/installing-updates-features-roles/common-windows-update-errors"
+      }
+    },
+    "0x80244022": {
+      "category": "WSUS / Service Unavailable",
+      "description": "The update source returned HTTP 503 and is temporarily unavailable or overloaded.",
+      "confidence": "High",
+      "recommendations": [
+        {
+          "priority": 1,
+          "action": "Validate WSUS/SUP and IIS service health, application pools, disk space, and database connectivity."
+        },
+        {
+          "priority": 2,
+          "action": "Confirm that proxy or load-balancer infrastructure is not returning the 503 response."
+        },
+        {
+          "priority": 3,
+          "action": "Review WUAHandler.log, WindowsUpdate.log, IIS logs, and WSUS health before retrying the scan."
+        }
+      ],
+      "source": {
+        "type": "MicrosoftOfficial",
+        "title": "Windows Update common errors and mitigation",
+        "url": "https://learn.microsoft.com/en-us/troubleshoot/windows-client/installing-updates-features-roles/common-windows-update-errors"
+      }
+    },
+    "0x80070490": {
+      "category": "Driver Servicing / Missing Metadata",
+      "description": "Required driver architecture information is missing during update installation.",
+      "confidence": "High",
+      "recommendations": [
+        {
+          "priority": 1,
+          "action": "Review CBS.log and the DriverOperations registry data to identify the driver entry with missing architecture metadata."
+        },
+        {
+          "priority": 2,
+          "action": "Validate the affected driver package and replace or repair it using an approved vendor source."
+        },
+        {
+          "priority": 3,
+          "action": "Retry the update after correcting the specific driver metadata issue."
+        }
+      ],
+      "source": {
+        "type": "MicrosoftOfficial",
+        "title": "Windows Update common errors and mitigation",
+        "url": "https://learn.microsoft.com/en-us/troubleshoot/windows-client/installing-updates-features-roles/common-windows-update-errors"
+      }
+    },
+    "0x800F0922": {
+      "category": "Servicing Installer Failure",
+      "description": "A servicing installer failed; the exact cause must be confirmed in CBS.log.",
+      "confidence": "High",
+      "recommendations": [
+        {
+          "priority": 1,
+          "action": "Review CBS.log for license, product-key token, permission, or installer failure details at the update timestamp."
+        },
+        {
+          "priority": 2,
+          "action": "Validate free space and permissions on servicing-related system locations before changing any ACL."
+        },
+        {
+          "priority": 3,
+          "action": "Apply only the remediation supported by the evidence found in CBS.log, then restart and retry."
+        }
+      ],
+      "source": {
+        "type": "MicrosoftOfficial",
+        "title": "Windows Update common errors and mitigation",
+        "url": "https://learn.microsoft.com/en-us/troubleshoot/windows-client/installing-updates-features-roles/common-windows-update-errors"
+      }
+    },
+    "0x800706BE": {
+      "category": "Servicing / Corrupted Package",
+      "description": "The update package or servicing state may be corrupted, causing an RPC or installation failure.",
+      "confidence": "High",
+      "recommendations": [
+        {
+          "priority": 1,
+          "action": "Review CBS.log and DISM.log to identify the corrupted package and its current state."
+        },
+        {
+          "priority": 2,
+          "action": "Run DISM /Online /Cleanup-Image /RestoreHealth and SFC /Scannow before making manual registry changes."
+        },
+        {
+          "priority": 3,
+          "action": "Escalate manual package-state repair only after backup and validation of the exact corrupted package."
+        }
+      ],
+      "source": {
+        "type": "MicrosoftOfficial",
+        "title": "Windows Update common errors and mitigation",
+        "url": "https://learn.microsoft.com/en-us/troubleshoot/windows-client/installing-updates-features-roles/common-windows-update-errors"
+      }
+    },
+    "0x8007066A": {
+      "category": "Windows Installer / Applicability",
+      "description": "The upgrade cannot be installed because the product may be missing or the update targets another version.",
+      "confidence": "High",
+      "recommendations": [
+        {
+          "priority": 1,
+          "action": "Confirm that the target product and exact version required by the update are installed."
+        },
+        {
+          "priority": 2,
+          "action": "Validate the update applicability, architecture, language, and product code against the device inventory."
+        },
+        {
+          "priority": 3,
+          "action": "Review MSI logging and UpdatesDeployment.log to identify the product or patch applicability mismatch."
+        }
+      ],
+      "source": {
+        "type": "CuratedTechnical",
+        "title": "SCCM Patch Dashboard curated knowledge",
+        "url": ""
+      }
+    },
+    "0x87D00319": {
+      "category": "Configuration Manager Detection",
+      "description": "Configuration Manager could not detect the application after installation or the detection rule returned an unexpected result.",
+      "confidence": "High",
+      "recommendations": [
+        {
+          "priority": 1,
+          "action": "Validate the application detection method against the actual post-installation state on the device."
+        },
+        {
+          "priority": 2,
+          "action": "Review AppEnforce.log and AppDiscovery.log for the executed command, exit code, and detection result."
+        },
+        {
+          "priority": 3,
+          "action": "Correct the detection rule or installation behavior, then rerun application evaluation."
+        }
+      ],
+      "source": {
+        "type": "CuratedTechnical",
+        "title": "SCCM Patch Dashboard curated knowledge",
+        "url": ""
+      }
+    },
+    "0x800F081E": {
+      "category": "Update Applicability",
+      "description": "The update package is not applicable to this computer.",
+      "confidence": "High",
+      "recommendations": [
+        {
+          "priority": 1,
+          "action": "Confirm the operating system version, build, architecture, language, and prerequisite servicing stack."
+        },
+        {
+          "priority": 2,
+          "action": "Validate that the deployment contains the correct update for this device and supersedence state."
+        },
+        {
+          "priority": 3,
+          "action": "Review CBS.log and WUAHandler.log for the specific applicability reason."
+        }
+      ],
+      "source": {
+        "type": "CuratedTechnical",
+        "title": "SCCM Patch Dashboard curated knowledge",
+        "url": ""
+      }
+    },
+    "0x80244017": {
+      "category": "WSUS / Access Denied",
+      "description": "The update service denied access, commonly corresponding to HTTP 403.",
+      "confidence": "High",
+      "recommendations": [
+        {
+          "priority": 1,
+          "action": "Validate client access to the configured WSUS/SUP and confirm IIS authentication and authorization settings."
+        },
+        {
+          "priority": 2,
+          "action": "Check proxy, SSL inspection, certificates, and network controls that could return HTTP 403."
+        },
+        {
+          "priority": 3,
+          "action": "Review WindowsUpdate.log, WUAHandler.log, and IIS logs for the rejected request."
+        }
+      ],
+      "source": {
+        "type": "CuratedTechnical",
+        "title": "SCCM Patch Dashboard curated knowledge",
+        "url": ""
+      }
+    },
+    "0x80244010": {
+      "category": "WSUS / Scan",
+      "description": "Windows Update exceeded the maximum number of server round trips while searching for updates.",
+      "confidence": "High",
+      "recommendations": [
+        {
+          "priority": 1,
+          "action": "Retry the scan after allowing WSUS/SUP synchronization and client metadata processing to complete."
+        },
+        {
+          "priority": 2,
+          "action": "Validate WSUS health, product/classification scope, supersedence cleanup, and database performance."
+        },
+        {
+          "priority": 3,
+          "action": "Review WUAHandler.log and WindowsUpdate.log for repeated scan rounds or metadata issues."
+        }
+      ],
+      "source": {
+        "type": "CuratedTechnical",
+        "title": "SCCM Patch Dashboard curated knowledge",
+        "url": ""
+      }
+    },
+    "0x80240437": {
+      "category": "Windows Update Scan",
+      "description": "The update search could not complete because the service returned an unexpected response.",
+      "confidence": "High",
+      "recommendations": [
+        {
+          "priority": 1,
+          "action": "Review WindowsUpdate.log and WUAHandler.log for the underlying service or HTTP response."
+        },
+        {
+          "priority": 2,
+          "action": "Validate WSUS/SUP health, proxy behavior, TLS, and client policy configuration."
+        },
+        {
+          "priority": 3,
+          "action": "Retry the scan only after confirming connectivity and service health."
+        }
+      ],
+      "source": {
+        "type": "CuratedTechnical",
+        "title": "SCCM Patch Dashboard curated knowledge",
+        "url": ""
+      }
+    }
+  }
+}
