@@ -2,9 +2,10 @@
 .SYNOPSIS
     Limpa a OutlookSecureTempFolder de todos os perfis de usuário na máquina.
 .DESCRIPTION
-    Percorre todos os perfis em C:\Users, localiza o caminho da
-    OutlookSecureTempFolder no registro de cada usuário (carregando a hive
-    NTUSER.DAT quando o perfil não está logado) e limpa o conteúdo da pasta.
+    Fecha o processo do Outlook em execução, percorre todos os perfis em
+    C:\Users, localiza o caminho da OutlookSecureTempFolder no registro de
+    cada usuário (carregando a hive NTUSER.DAT quando o perfil não está
+    logado) e limpa o conteúdo da pasta.
     Requer execução como Administrador.
 #>
 
@@ -22,6 +23,24 @@ function Write-Log {
 
 Write-Log "=== Iniciando limpeza da OutlookSecureTempFolder em todos os perfis ==="
 
+# --- Fecha o Outlook (se estiver rodando) para evitar arquivos travados ---
+$outlookProcs = Get-Process -Name "OUTLOOK" -ErrorAction SilentlyContinue
+if ($outlookProcs) {
+    Write-Log "Outlook em execução detectado (PID(s): $($outlookProcs.Id -join ', ')). Encerrando..."
+    $outlookProcs | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 3
+
+    # Confirma que realmente fechou
+    $stillRunning = Get-Process -Name "OUTLOOK" -ErrorAction SilentlyContinue
+    if ($stillRunning) {
+        Write-Log "AVISO: Outlook ainda em execução após tentativa de encerramento (PID(s): $($stillRunning.Id -join ', '))."
+    } else {
+        Write-Log "Outlook encerrado com sucesso."
+    }
+} else {
+    Write-Log "Outlook não estava em execução."
+}
+
 # Pega todos os perfis de usuário reais (ignora contas de serviço padrão)
 $profileList = Get-ChildItem "C:\Users" -Directory | Where-Object {
     $_.Name -notin @('Public', 'Default', 'Default User', 'All Users')
@@ -36,7 +55,6 @@ foreach ($profile in $profileList) {
         continue
     }
 
-    # Verifica se o perfil já está carregado (usuário logado no momento)
     $sid = $null
     try {
         $sid = (New-Object System.Security.Principal.NTAccount($userName)).Translate([System.Security.Principal.SecurityIdentifier]).Value
@@ -50,7 +68,6 @@ foreach ($profile in $profileList) {
     $hiveMountedByScript = $false
 
     if (-not $hiveLoaded) {
-        # Carrega a hive temporariamente
         $result = reg load "HKU\$tempHiveName" "$ntuserPath" 2>&1
         if ($LASTEXITCODE -ne 0) {
             Write-Log "[$userName] Falha ao carregar hive (pode estar em uso/logado). Detalhe: $result"
@@ -62,7 +79,6 @@ foreach ($profile in $profileList) {
         $regRoot = "Registry::HKEY_USERS\$sid"
     }
 
-    # Outlook pode ter múltiplas versões de chave (16.0 = Office 2016-365, etc.)
     $officeVersions = @('16.0','15.0','14.0')
     $tempFolderFound = $false
 
@@ -72,7 +88,6 @@ foreach ($profile in $profileList) {
             $secureTempFolder = (Get-ItemProperty -Path $regKeyPath -Name "OutlookSecureTempFolder" -ErrorAction SilentlyContinue).OutlookSecureTempFolder
             if ($secureTempFolder) {
                 $tempFolderFound = $true
-                # Resolve variáveis de ambiente do próprio usuário (%userprofile% etc.)
                 $resolvedPath = $secureTempFolder -replace '%USERPROFILE%', $profile.FullName
                 $resolvedPath = [Environment]::ExpandEnvironmentVariables($resolvedPath)
 
@@ -96,7 +111,6 @@ foreach ($profile in $profileList) {
         Write-Log "[$userName] Nenhuma chave OutlookSecureTempFolder encontrada (Outlook pode não estar instalado/configurado)."
     }
 
-    # Descarrega a hive se foi carregada por este script
     if ($hiveMountedByScript) {
         [gc]::Collect()
         [gc]::WaitForPendingFinalizers()
