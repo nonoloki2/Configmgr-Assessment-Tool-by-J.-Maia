@@ -1,9 +1,10 @@
 <#
 .SYNOPSIS
-    Corrige a associação de arquivos .msg para abrir com o Outlook em vez do Adobe Reader,
-    no contexto de um usuário específico, remotamente.
+    Define a associação de .msg para Outlook usando o mecanismo nativo do
+    Windows (DISM Import-DefaultAppAssociations), sem ferramentas de terceiros
+    e sem downloads em tempo de execução.
 .PARAMETER TargetUser
-    Nome de usuário (SAM, ex: "gabriela.renton") do perfil afetado.
+    Nome de usuário (SAM) do perfil afetado — usado apenas para log.
 #>
 
 param(
@@ -12,8 +13,7 @@ param(
 )
 
 $logPath = "C:\Temp\FixMsgAssoc_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
-$toolDir = "C:\Temp\SetUserFTA"
-New-Item -ItemType Directory -Path $toolDir -Force -ErrorAction SilentlyContinue | Out-Null
+New-Item -ItemType Directory -Path "C:\Temp" -Force -ErrorAction SilentlyContinue | Out-Null
 
 function Write-Log {
     param([string]$Message)
@@ -22,52 +22,27 @@ function Write-Log {
     Add-Content -Path $logPath -Value $line
 }
 
-# --- 1. Confirma que o usuário está com sessão ativa (necessário para o trigger Interactive) ---
-$session = query user 2>$null | Where-Object { $_ -match [regex]::Escape($TargetUser) }
-if (-not $session) {
-    Write-Log "ERRO: usuário '$TargetUser' não encontrado com sessão ativa nesta máquina. Peça para ele logar e rode novamente."
-    return
-}
-Write-Log "Sessão ativa encontrada para $TargetUser."
+Write-Log "Iniciando correção de associação .msg para usuário: $TargetUser"
 
-# --- 2. Baixa o SetUserFTA.exe (se ainda não estiver presente) ---
-$exePath = Join-Path $toolDir "SetUserFTA.exe"
-if (-not (Test-Path $exePath)) {
-    try {
-        Invoke-WebRequest -Uri "https://kolbi.cz/SetUserFTA.exe" -OutFile $exePath -UseBasicParsing
-        Write-Log "SetUserFTA.exe baixado com sucesso."
-    } catch {
-        Write-Log "ERRO ao baixar SetUserFTA.exe: $_. Copie manualmente para $toolDir e rode de novo."
-        return
-    }
-} else {
-    Write-Log "SetUserFTA.exe já presente em $toolDir."
-}
+# --- Gera o XML de associação padrão (nativo, sem terceiros) ---
+$xmlPath = "C:\Temp\DefaultAppAssociations.xml"
+$xmlContent = @"
+<?xml version="1.0" encoding="UTF-8"?>
+<DefaultAssociations>
+    <Association Identifier=".msg" ProgId="Outlook.File.msg" ApplicationName="Microsoft Outlook" />
+</DefaultAssociations>
+"@
+$xmlContent | Out-File -FilePath $xmlPath -Encoding UTF8
+Write-Log "XML de associação gerado em $xmlPath"
 
-# --- 3. Descobre o ProgID que o Outlook usa para .msg neste sistema ---
-$progId = (Get-ItemProperty "HKLM:\SOFTWARE\Classes\.msg" -Name "(default)" -ErrorAction SilentlyContinue).'(default)'
-if (-not $progId) { $progId = "Outlook.File.msg" }  # fallback padrão
-Write-Log "ProgID identificado para .msg: $progId"
-
-# --- 4. Cria tarefa agendada temporária que roda no contexto do usuário logado ---
-$taskName = "TEMP_FixMsgFTA_$TargetUser"
-$action  = New-ScheduledTaskAction -Execute $exePath -Argument ".msg $progId" -WorkingDirectory $toolDir
-$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddSeconds(5)
-$principal = New-ScheduledTaskPrincipal -UserId $TargetUser -LogonType Interactive -RunLevel Limited
-
+# --- Aplica via DISM (componente nativo do Windows) ---
 try {
-    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $principal -Force | Out-Null
-    Write-Log "Tarefa '$taskName' registrada. Executando..."
-    Start-ScheduledTask -TaskName $taskName
-    Start-Sleep -Seconds 5
-
-    $result = (Get-ScheduledTaskInfo -TaskName $taskName).LastTaskResult
-    Write-Log "Resultado da execução (0 = sucesso): $result"
+    $dismResult = Dism.exe /Online /Import-DefaultAppAssociations:"$xmlPath" 2>&1
+    Write-Log "DISM executado. Saída: $dismResult"
 } catch {
-    Write-Log "ERRO ao registrar/executar a tarefa: $_"
-} finally {
-    Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
-    Write-Log "Tarefa temporária removida."
+    Write-Log "ERRO ao executar DISM: $_"
+    return
 }
 
 Write-Log "=== Concluído. Log salvo em $logPath ==="
+Write-Log "OBS: DISM aplica a novos perfis por padrão. Para perfis EXISTENTES, é necessário reforçar via GPO 'Configure a default associations configuration file' apontando para este mesmo XML, para reaplicar no próximo refresh de política."

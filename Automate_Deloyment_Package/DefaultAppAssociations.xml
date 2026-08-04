@@ -1,0 +1,10 @@
+# Gera XML de associação para .msg -> Outlook
+$xmlContent = @"
+<?xml version="1.0" encoding="UTF-8"?>
+<DefaultAssociations>
+    <Association Identifier=".msg" ProgId="Outlook.File.msg" ApplicationName="Microsoft Outlook" />
+</DefaultAssociations>
+"@
+
+$xmlPath = "C:\Temp\DefaultAppAssociations.xml"
+$xmlContent | Out-File -FilePath $xmlPath -Encoding UTF8
