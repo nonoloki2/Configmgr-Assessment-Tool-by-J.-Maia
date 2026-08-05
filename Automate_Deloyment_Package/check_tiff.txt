@@ -1,0 +1,9 @@
+1) Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.tif\UserChoice" -ErrorAction SilentlyContinue
+
+
+2) Get-ChildItem "HKLM:\SOFTWARE\Classes" -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -match "ImageMaster|Image Master" }
+
+
+
+3) Get-ItemProperty "HKLM:\SOFTWARE\Classes\TIFImage.Document" -ErrorAction SilentlyContinue
+(Get-ItemProperty "HKLM:\SOFTWARE\Classes\TIFImage.Document\shell\open\command" -ErrorAction SilentlyContinue).'(default)'
