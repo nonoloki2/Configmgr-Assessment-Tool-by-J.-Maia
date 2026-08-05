@@ -1,0 +1,2 @@
+Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.tif\UserChoice" -ErrorAction SilentlyContinue
+Get-ChildItem "HKLM:\SOFTWARE\Classes" | Where-Object { $_.PSChildName -match "tif|image" -or (Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue).'(default)' -match "Image" }
