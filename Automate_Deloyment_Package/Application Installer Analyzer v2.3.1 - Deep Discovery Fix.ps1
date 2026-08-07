@@ -1,4 +1,4 @@
-#requires -version 5.1
+﻿#requires -version 5.1
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
@@ -155,7 +155,7 @@ function Invoke-RegQuery {
         Add-Diagnostic "reg.exe $Label returned $($parsed.Count) ARP entries."
         return $parsed
     } catch {
-        Add-Diagnostic "reg.exe FAILED for $Label: $($_.Exception.Message)"
+        Add-Diagnostic "reg.exe FAILED for ${Label}: $($_.Exception.Message)"
         return @()
     }
 }
@@ -348,7 +348,7 @@ function Load-Programs {
 }
 
 $form = New-Object System.Windows.Forms.Form
-$form.Text = 'Application Installer Analyzer v2.3 - Deep Discovery'
+$form.Text = 'Application Installer Analyzer v2.3.1 - Deep Discovery Fix'
 $form.Size = New-Object System.Drawing.Size(1300,900)
 $form.StartPosition='CenterScreen'
 $form.MinimumSize = New-Object System.Drawing.Size(1100,760)
