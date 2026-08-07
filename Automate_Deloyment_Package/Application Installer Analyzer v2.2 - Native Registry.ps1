@@ -1,8 +1,15 @@
 ﻿#Requires -Version 5.1
 <#+
-    Uninstall String Tool v2.0
+    Application Installer Analyzer v2.2
     --------------------------
-    Packaging/SCCM-oriented uninstall command analyzer.
+    Packaging/SCCM-oriented installer and uninstall command analyzer.
+
+    v2.2 Native Registry Accuracy:
+      - Product-aware Package Cache correlation.
+      - Strong penalties for same-vendor/different-product false positives.
+      - Authenticode signature inspection for cached bootstrapper candidates.
+      - Bentley logic only applies MicroStation switches to actual MicroStation identity.
+      - Cache candidates now carry affinity/confidence instead of a raw vendor score.
 
     Goals:
       - Enumerate uninstall registrations from HKLM 64-bit, HKLM 32-bit and HKCU.
@@ -119,31 +126,93 @@ function Get-ProductCodeFromEntry {
     return $null
 }
 
-function Get-InstalledPrograms {
-    param([string]$Filter)
+function Convert-RegistryValueKindSafe {
+    param($Key, [string]$Name)
+    try { return $Key.GetValue($Name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames) }
+    catch { try { return $Key.GetValue($Name) } catch { return $null } }
+}
 
-    $locations = @(
-        [pscustomobject]@{ Hive='HKLM'; View='64-bit'; Path='HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' },
-        [pscustomobject]@{ Hive='HKLM'; View='32-bit'; Path='HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*' },
-        [pscustomobject]@{ Hive='HKCU'; View='Current user'; Path='HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' }
+function Get-InstalledProgramsNative {
+    <#
+      Enumerates ARP entries using Microsoft.Win32.RegistryKey with an explicit
+      RegistryView. This avoids WOW64 redirection ambiguity when the tool itself
+      is started from 32-bit PowerShell.
+    #>
+    $targets = @(
+        [pscustomobject]@{ Hive=[Microsoft.Win32.RegistryHive]::LocalMachine; HiveName='HKLM'; View=[Microsoft.Win32.RegistryView]::Registry64; ViewName='64-bit'; SubKey='SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall' },
+        [pscustomobject]@{ Hive=[Microsoft.Win32.RegistryHive]::LocalMachine; HiveName='HKLM'; View=[Microsoft.Win32.RegistryView]::Registry32; ViewName='32-bit'; SubKey='SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall' },
+        [pscustomobject]@{ Hive=[Microsoft.Win32.RegistryHive]::CurrentUser;  HiveName='HKCU'; View=[Microsoft.Win32.RegistryView]::Default;    ViewName='Current user'; SubKey='SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall' }
+    )
+
+    $propertyNames = @(
+        'DisplayName','DisplayVersion','Publisher','InstallLocation','InstallSource','DisplayIcon',
+        'UninstallString','QuietUninstallString','ModifyPath','RepairPath','URLInfoAbout','HelpLink',
+        'InstallDate','EstimatedSize','WindowsInstaller','SystemComponent','NoRemove','NoModify',
+        'NoRepair','VersionMajor','VersionMinor','Version','BundleCachePath','BundleProviderKey',
+        'ParentDisplayName','ParentKeyName','ReleaseType'
     )
 
     $items = New-Object System.Collections.Generic.List[object]
-    foreach ($loc in $locations) {
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
+
+    foreach ($t in $targets) {
+        $base = $null; $root = $null
         try {
-            foreach ($p in (Get-ItemProperty -Path $loc.Path -ErrorAction SilentlyContinue)) {
-                if (-not $p.DisplayName) { continue }
-                if ($Filter -and $p.DisplayName -notmatch [regex]::Escape($Filter)) { continue }
+            $base = [Microsoft.Win32.RegistryKey]::OpenBaseKey($t.Hive, $t.View)
+            $root = $base.OpenSubKey($t.SubKey, $false)
+            if (-not $root) { continue }
 
-                Add-Member -InputObject $p -NotePropertyName RegistryHive -NotePropertyValue $loc.Hive -Force
-                Add-Member -InputObject $p -NotePropertyName RegistryView -NotePropertyValue $loc.View -Force
-                Add-Member -InputObject $p -NotePropertyName RegistryPath -NotePropertyValue ($p.PSPath -replace '^Microsoft\.PowerShell\.Core\\Registry::','') -Force
-                $items.Add($p)
+            foreach ($subName in $root.GetSubKeyNames()) {
+                $k = $null
+                try {
+                    $k = $root.OpenSubKey($subName, $false)
+                    if (-not $k) { continue }
+                    $displayName = [string](Convert-RegistryValueKindSafe -Key $k -Name 'DisplayName')
+                    if ([string]::IsNullOrWhiteSpace($displayName)) { continue }
+
+                    $o = [ordered]@{}
+                    foreach ($n in $propertyNames) { $o[$n] = Convert-RegistryValueKindSafe -Key $k -Name $n }
+                    $o['PSChildName'] = $subName
+                    $o['RegistryHive'] = $t.HiveName
+                    $o['RegistryView'] = $t.ViewName
+                    $o['RegistryPath'] = "$($t.HiveName):\$($t.SubKey)\$subName"
+
+                    $dedupe = "$($t.HiveName)|$($t.ViewName)|$subName"
+                    if ($seen.Add($dedupe)) { $items.Add([pscustomobject]$o) }
+                } catch {} finally { if ($k) { $k.Dispose() } }
             }
-        } catch {}
+        } catch {} finally {
+            if ($root) { $root.Dispose() }
+            if ($base) { $base.Dispose() }
+        }
     }
+    return @($items | Sort-Object DisplayName, DisplayVersion, RegistryView)
+}
 
-    $items | Sort-Object DisplayName, DisplayVersion, RegistryView
+function Test-ProgramSearchMatch {
+    param($Program, [string]$Filter)
+    if ([string]::IsNullOrWhiteSpace($Filter)) { return $true }
+
+    # Token-based AND matching. "microstation 2026" matches an entry as long as
+    # every meaningful token occurs somewhere in the ARP metadata.
+    $haystack = @(
+        [string]$Program.DisplayName,[string]$Program.DisplayVersion,[string]$Program.Publisher,
+        [string]$Program.UninstallString,[string]$Program.QuietUninstallString,[string]$Program.InstallLocation,
+        [string]$Program.PSChildName,[string]$Program.BundleCachePath
+    ) -join ' '
+
+    $tokens = @($Filter -split '\s+' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    foreach ($token in $tokens) {
+        if ($haystack -notmatch [regex]::Escape($token)) { return $false }
+    }
+    return $true
+}
+
+function Get-InstalledPrograms {
+    param([string]$Filter)
+    $all = @(Get-InstalledProgramsNative)
+    if ([string]::IsNullOrWhiteSpace($Filter)) { return $all }
+    return @($all | Where-Object { Test-ProgramSearchMatch -Program $_ -Filter $Filter })
 }
 
 function Get-InstallerFamily {
@@ -234,14 +303,19 @@ function Get-SilentAnalysis {
         }
     }
 
-    # Bentley / MicroStation: official Bentley guidance uses -Uninstall -Quiet.
-    $bentleySignal = (([string]$Program.Publisher -match '(?i)Bentley') -or ([string]$Program.DisplayName -match '(?i)MicroStation|Bentley') -or ($meta -and (($meta.CompanyName -match '(?i)Bentley') -or ($meta.ProductName -match '(?i)MicroStation'))))
-    if ($bentleySignal -and $exe) {
+    # Bentley / MicroStation: apply the vendor rule only when the selected product itself
+    # is MicroStation. Publisher="Bentley" alone is NOT enough (CONNECTION Client,
+    # licensing components and other Bentley products share the same publisher).
+    $microStationSignal = (
+        ([string]$Program.DisplayName -match '(?i)\bMicroStation\b') -or
+        ($meta -and (([string]$meta.ProductName -match '(?i)\bMicroStation\b') -or ([string]$meta.FileDescription -match '(?i)\bMicroStation\b')))
+    )
+    if ($microStationSignal -and $exe) {
         $cmd = '"' + (Expand-CommandPath $exe) + '" -Uninstall -Quiet'
-        $evidence.Add('Bentley/MicroStation identity detected from ARP or executable metadata.')
+        $evidence.Add('MicroStation identity detected from the selected ARP entry or executable metadata.')
         if ($exe -match '(?i)\\ProgramData\\Package Cache\\') { $evidence.Add('Bootstrapper is located in Windows Package Cache.') }
-        $evidence.Add('Bentley documentation specifies -Uninstall -Quiet for MicroStation bootstrapper removal.')
-        return New-AnalysisResult -Command $cmd -Confidence 'VERIFIED / VENDOR PATTERN' -Source 'Bentley MicroStation rule + registered bootstrapper' -Installer 'Bentley bootstrapper' -Evidence $evidence -Warnings $warnings
+        $evidence.Add('MicroStation vendor uninstall pattern: -Uninstall -Quiet.')
+        return New-AnalysisResult -Command $cmd -Confidence 'HIGH / PRODUCT MATCH' -Source 'MicroStation product rule + registered bootstrapper' -Installer 'Bentley MicroStation bootstrapper' -Evidence $evidence -Warnings $warnings
     }
 
     if (Test-CommandHasSilentSwitch $uninstall) {
@@ -275,60 +349,180 @@ function Get-SilentAnalysis {
     return New-AnalysisResult -Command $uninstall -Confidence 'UNVERIFIED' -Source 'Registry: UninstallString only' -Installer $family -Evidence $evidence -Warnings $warnings
 }
 
-function Get-PackageCacheCandidates {
-    param($Program, [int]$MaxResults = 30)
+function Get-MeaningfulTokens {
+    param([string]$Text)
 
-    $root = Join-Path $env:ProgramData 'Package Cache'
-    if (-not (Test-Path -LiteralPath $root)) { return @() }
+    if ([string]::IsNullOrWhiteSpace($Text)) { return @() }
 
-    $tokens = New-Object System.Collections.Generic.List[string]
-    foreach ($text in @([string]$Program.DisplayName, [string]$Program.Publisher)) {
-        if (-not $text) { continue }
-        foreach ($t in ($text -split '[^A-Za-z0-9]+')) {
-            if ($t.Length -ge 4 -and $t -notmatch '^(Edition|Software|Systems|Company|Limited|Version)$') { $tokens.Add($t) }
+    $stop = @(
+        'edition','software','systems','system','company','limited','incorporated','corporation',
+        'client','application','applications','windows','microsoft','program','setup','installer',
+        'x64','x86','connect','version','update','runtime','component','components'
+    )
+
+    $tokens = @()
+    foreach ($t in ($Text -split '[^A-Za-z0-9]+')) {
+        $x = $t.Trim().ToLowerInvariant()
+        if ($x.Length -lt 4) { continue }
+        if ($stop -contains $x) { continue }
+        if ($x -match '^\d+$') { continue }
+        $tokens += $x
+    }
+    return @($tokens | Select-Object -Unique)
+}
+
+function Get-AuthenticodeSummary {
+    param([string]$Path)
+
+    try {
+        $sig = Get-AuthenticodeSignature -LiteralPath $Path -ErrorAction Stop
+        return [pscustomobject]@{
+            Status  = [string]$sig.Status
+            Subject = if ($sig.SignerCertificate) { [string]$sig.SignerCertificate.Subject } else { '' }
+        }
+    } catch {
+        return [pscustomobject]@{ Status='Unknown'; Subject='' }
+    }
+}
+
+function Get-ProductAffinity {
+    param($Program, [System.IO.FileInfo]$File)
+
+    $meta = $File.VersionInfo
+    $selectedName = [string]$Program.DisplayName
+    $selectedPublisher = [string]$Program.Publisher
+    $candidateText = @(
+        $File.Name, $File.FullName, $meta.CompanyName, $meta.ProductName,
+        $meta.FileDescription, $meta.OriginalFilename
+    ) -join ' '
+
+    $productTokens = @(Get-MeaningfulTokens $selectedName)
+    $vendorTokens  = @(Get-MeaningfulTokens $selectedPublisher)
+    $score = 0
+    $reasons = New-Object System.Collections.Generic.List[string]
+    $warnings = New-Object System.Collections.Generic.List[string]
+
+    # Exact path from ARP is decisive evidence.
+    $knownExe = $null
+    if ($Program.UninstallString) { $knownExe = (Split-CommandLine $Program.UninstallString).Exe }
+    if ($knownExe -and [string]::Equals((Expand-CommandPath $knownExe), $File.FullName, [StringComparison]::OrdinalIgnoreCase)) {
+        $score += 100
+        $reasons.Add('Exact executable path referenced by UninstallString')
+    }
+
+    # Product-name evidence carries much more weight than manufacturer evidence.
+    $matchedProductTokens = 0
+    foreach ($t in $productTokens) {
+        if ($candidateText -match [regex]::Escape($t)) {
+            $matchedProductTokens++
+            $score += 22
+            $reasons.Add("Product token matched: $t")
         }
     }
 
-    $knownExe = $null
-    if ($Program.UninstallString) { $knownExe = (Split-CommandLine $Program.UninstallString).Exe }
+    if ($productTokens.Count -gt 0) {
+        $ratio = $matchedProductTokens / [double]$productTokens.Count
+        if ($ratio -ge 0.75) { $score += 25; $reasons.Add('Strong selected-product name correlation') }
+        elseif ($ratio -eq 0) { $score -= 35; $warnings.Add('No selected-product token appears in this candidate') }
+    }
+
+    $vendorMatched = $false
+    foreach ($t in $vendorTokens) {
+        if ($candidateText -match [regex]::Escape($t)) { $vendorMatched = $true; break }
+    }
+    if ($vendorMatched) { $score += 10; $reasons.Add('Publisher/vendor metadata matched') }
+
+    if ($File.Name -match '(?i)^Setup_.*\.exe$|^setup\.exe$|bootstrap|bundle') {
+        $score += 8
+        $reasons.Add('Bootstrapper-like filename')
+    }
+
+    # Bentley-specific false-positive protection discovered during MicroStation testing.
+    if ($selectedName -match '(?i)\bMicroStation\b') {
+        if ($candidateText -match '(?i)\bMicroStation\b') {
+            $score += 45
+            $reasons.Add('Explicit MicroStation identity')
+        }
+        else {
+            $score -= 55
+            $warnings.Add('Selected product is MicroStation but candidate metadata does not identify MicroStation')
+        }
+
+        if ($candidateText -match '(?i)CONNECTION\s*Client|CONNECTIONClient') {
+            $score -= 80
+            $warnings.Add('Bentley CONNECTION Client is a related prerequisite, not the MicroStation uninstaller')
+        }
+        if ($candidateText -match '(?i)Licens|License') {
+            $score -= 50
+            $warnings.Add('Bentley licensing component detected; not treated as the main product')
+        }
+    }
+
+    # Generic same-vendor/different-product protection.
+    $candidateProduct = [string]$meta.ProductName
+    if ($vendorMatched -and $matchedProductTokens -eq 0 -and $candidateProduct) {
+        $score -= 20
+        $warnings.Add("Same vendor but different/uncorrelated product: $candidateProduct")
+    }
+
+    $score = [Math]::Max(0, [Math]::Min(100, $score))
+    $confidence = if ($score -ge 90) { 'VERY HIGH' }
+                  elseif ($score -ge 75) { 'HIGH' }
+                  elseif ($score -ge 55) { 'MEDIUM' }
+                  elseif ($score -ge 35) { 'LOW' }
+                  else { 'REJECT / RELATED COMPONENT' }
+
+    return [pscustomobject]@{
+        Affinity   = $score
+        Confidence = $confidence
+        Reasons    = @($reasons)
+        Warnings   = @($warnings)
+    }
+}
+
+function Get-PackageCacheCandidates {
+    param($Program, [int]$MaxResults = 40)
+
+    $root = Join-Path $env:ProgramData 'Package Cache'
+    if (-not (Test-Path -LiteralPath $root)) { return @() }
 
     $results = New-Object System.Collections.Generic.List[object]
     try {
         $executables = Get-ChildItem -LiteralPath $root -Recurse -File -Filter '*.exe' -ErrorAction SilentlyContinue
         foreach ($f in $executables) {
-            $score = 0
-            $reasons = New-Object System.Collections.Generic.List[string]
-            $meta = $null
-            try { $meta = $f.VersionInfo } catch {}
-            $hay = @($f.Name,$f.FullName,$meta.CompanyName,$meta.ProductName,$meta.FileDescription,$meta.OriginalFilename) -join ' '
+            $aff = Get-ProductAffinity -Program $Program -File $f
 
-            if ($knownExe -and ([string]::Equals((Expand-CommandPath $knownExe), $f.FullName, [StringComparison]::OrdinalIgnoreCase))) {
-                $score += 100; $reasons.Add('Exact path from UninstallString')
-            }
-            if ($f.Name -match '(?i)^Setup_.*\.exe$|^setup\.exe$|bootstrap|bundle') {
-                $score += 12; $reasons.Add('Bootstrapper-like filename')
-            }
-            if ($hay -match '(?i)Bentley') { $score += 30; $reasons.Add('Bentley metadata') }
-            if ($hay -match '(?i)MicroStation') { $score += 35; $reasons.Add('MicroStation metadata') }
-            foreach ($t in ($tokens | Select-Object -Unique)) {
-                if ($hay -match [regex]::Escape($t)) { $score += 4 }
+            # Keep low-confidence related components visible for forensic context,
+            # but they sort below actual product matches.
+            $meta = $f.VersionInfo
+            $sig = Get-AuthenticodeSummary -Path $f.FullName
+
+            $sameVendor = $false
+            if (-not [string]::IsNullOrWhiteSpace([string]$Program.Publisher)) {
+                $sameVendor = ([string]$meta.CompanyName -match ('(?i)' + [regex]::Escape([string]$Program.Publisher)))
             }
 
-            if ($score -gt 0) {
+            if ($aff.Affinity -gt 0 -or $sameVendor) {
                 $results.Add([pscustomobject]@{
-                    Score       = $score
-                    Path        = $f.FullName
-                    CompanyName = $meta.CompanyName
-                    ProductName = $meta.ProductName
-                    Description = $meta.FileDescription
-                    Version     = $meta.FileVersion
-                    Reasons     = ($reasons -join '; ')
+                    Affinity     = $aff.Affinity
+                    Confidence   = $aff.Confidence
+                    Path         = $f.FullName
+                    CompanyName  = $meta.CompanyName
+                    ProductName  = $meta.ProductName
+                    Description  = $meta.FileDescription
+                    Version      = $meta.FileVersion
+                    Signature    = $sig.Status
+                    Signer       = $sig.Subject
+                    Reasons      = ($aff.Reasons -join '; ')
+                    Warnings     = ($aff.Warnings -join '; ')
                 })
             }
         }
     } catch {}
 
-    $results | Sort-Object -Property @{Expression='Score';Descending=$true}, Path | Select-Object -First $MaxResults
+    $results |
+        Sort-Object -Property @{Expression='Affinity';Descending=$true}, Path |
+        Select-Object -First $MaxResults
 }
 
 function Search-InstallFolder {
@@ -366,7 +560,7 @@ function Get-SccmDetectionHint {
 # -----------------------------------------------------------------------------
 
 $form = New-Object System.Windows.Forms.Form
-$form.Text = 'Uninstall String Tool v2.0 - Packaging Analyzer'
+$form.Text = 'Application Installer Analyzer v2.2 - Native Registry Analyzer'
 $form.Size = New-Object System.Drawing.Size(1040, 760)
 $form.MinimumSize = New-Object System.Drawing.Size(900, 650)
 $form.StartPosition = 'CenterScreen'
@@ -380,27 +574,35 @@ $form.Controls.Add($lblSearch)
 
 $txtSearch = New-Object System.Windows.Forms.TextBox
 $txtSearch.Location = New-Object System.Drawing.Point(17, 38)
-$txtSearch.Size = New-Object System.Drawing.Size(600, 25)
+$txtSearch.Size = New-Object System.Drawing.Size(460, 25)
 $txtSearch.Anchor = 'Top,Left,Right'
 $form.Controls.Add($txtSearch)
 
 $btnSearch = New-Object System.Windows.Forms.Button
 $btnSearch.Text = 'Search Registry'
-$btnSearch.Location = New-Object System.Drawing.Point(630, 37)
+$btnSearch.Location = New-Object System.Drawing.Point(490, 37)
 $btnSearch.Size = New-Object System.Drawing.Size(120, 28)
 $btnSearch.Anchor = 'Top,Right'
 $form.Controls.Add($btnSearch)
 
+
+$btnAll = New-Object System.Windows.Forms.Button
+$btnAll.Text = 'Enumerate All'
+$btnAll.Location = New-Object System.Drawing.Point(618, 37)
+$btnAll.Size = New-Object System.Drawing.Size(122, 28)
+$btnAll.Anchor = 'Top,Right'
+$form.Controls.Add($btnAll)
+
 $btnFolder = New-Object System.Windows.Forms.Button
 $btnFolder.Text = 'Search Folder...'
-$btnFolder.Location = New-Object System.Drawing.Point(758, 37)
+$btnFolder.Location = New-Object System.Drawing.Point(748, 37)
 $btnFolder.Size = New-Object System.Drawing.Size(120, 28)
 $btnFolder.Anchor = 'Top,Right'
 $form.Controls.Add($btnFolder)
 
 $btnCache = New-Object System.Windows.Forms.Button
 $btnCache.Text = 'Package Cache'
-$btnCache.Location = New-Object System.Drawing.Point(886, 37)
+$btnCache.Location = New-Object System.Drawing.Point(878, 37)
 $btnCache.Size = New-Object System.Drawing.Size(125, 28)
 $btnCache.Anchor = 'Top,Right'
 $form.Controls.Add($btnCache)
@@ -450,7 +652,7 @@ $btnCopy.Anchor = 'Bottom,Right'
 $grpAnalysis.Controls.Add($btnCopy)
 
 $grpCache = New-Object System.Windows.Forms.GroupBox
-$grpCache.Text = 'Package Cache / bootstrapper candidates'
+$grpCache.Text = 'Package Cache / product-correlated bootstrapper candidates (double-click for evidence)'
 $grpCache.Location = New-Object System.Drawing.Point(17, 585)
 $grpCache.Size = New-Object System.Drawing.Size(994, 105)
 $grpCache.Anchor = 'Bottom,Left,Right'
@@ -501,6 +703,9 @@ function Show-ProgramAnalysis {
     $lines.Add("UninstallString       : $($Program.UninstallString)")
     $lines.Add("QuietUninstallString  : $($Program.QuietUninstallString)")
     $lines.Add("ModifyPath            : $($Program.ModifyPath)")
+    $lines.Add("RepairPath            : $($Program.RepairPath)")
+    $lines.Add("BundleCachePath       : $($Program.BundleCachePath)")
+    $lines.Add("BundleProviderKey     : $($Program.BundleProviderKey)")
     $lines.Add('')
     $lines.Add("Installer family : $($analysis.Installer)")
     $lines.Add("Confidence       : $($analysis.Confidence)")
@@ -537,20 +742,20 @@ function Show-ProgramAnalysis {
     $statusLabel.Text = "Analyzed: $($Program.DisplayName) | Confidence: $($analysis.Confidence)"
 }
 
-$btnSearch.Add_Click({
-    $term = $txtSearch.Text.Trim()
+function Load-ProgramList {
+    param([string]$Filter)
+
     $lstResults.Items.Clear(); $txtDetails.Clear(); $txtSilent.Clear(); $lstCache.Items.Clear()
     $script:currentResults.Clear(); $script:cacheResults.Clear(); $script:currentProgram = $null
 
-    if (-not $term) { $statusLabel.Text = 'Type a software name first.'; return }
+    $statusLabel.Text = 'Reading native 64-bit / 32-bit uninstall registrations...'; $form.Refresh()
+    $programs = @(Get-InstalledPrograms -Filter $Filter)
 
-    $statusLabel.Text = 'Searching uninstall registrations...'; $form.Refresh()
-    $programs = @(Get-InstalledPrograms -Filter $term)
     if ($programs.Count -eq 0) {
-        $statusLabel.Text = "No uninstall registration found for '$term'."
+        $statusLabel.Text = if ($Filter) { "No registration matched '$Filter'." } else { 'No ARP registrations were enumerated.' }
         [System.Windows.Forms.MessageBox]::Show(
-            "No matching ARP registration was found.`r`n`r`nTry Search Folder or Package Cache. For enterprise bootstrapper applications, the uninstaller may live under C:\ProgramData\Package Cache.",
-            'Uninstall String Tool v2.0','OK','Information') | Out-Null
+            "No matching ARP registration was found in the native 64-bit, native 32-bit, or current-user uninstall registry views.`r`n`r`nUse Enumerate All to verify what Windows exposes to the tool.",
+            'Application Installer Analyzer v2.2','OK','Information') | Out-Null
         return
     }
 
@@ -559,11 +764,22 @@ $btnSearch.Add_Click({
         $i++
         $label = "[$i] $($p.DisplayName)"
         if ($p.DisplayVersion) { $label += "  v$($p.DisplayVersion)" }
-        $label += "  [$($p.RegistryView)]"
+        if ($p.Publisher) { $label += "  | $($p.Publisher)" }
+        $label += "  [$($p.RegistryHive) $($p.RegistryView)]"
         $lstResults.Items.Add($label) | Out-Null
         $script:currentResults[$label] = $p
     }
-    $statusLabel.Text = "$($programs.Count) registration(s) found. Select one to analyze."
+    $statusLabel.Text = "$($programs.Count) registration(s) enumerated. Select one to analyze."
+}
+
+$btnSearch.Add_Click({
+    $term = $txtSearch.Text.Trim()
+    if (-not $term) { $statusLabel.Text = 'Type a software name or use Enumerate All.'; return }
+    Load-ProgramList -Filter $term
+})
+
+$btnAll.Add_Click({
+    Load-ProgramList -Filter ''
 })
 
 $lstResults.Add_SelectedIndexChanged({
@@ -618,7 +834,7 @@ $btnCache.Add_Click({
     if (-not $script:currentProgram) {
         $term = $txtSearch.Text.Trim()
         if (-not $term) {
-            [System.Windows.Forms.MessageBox]::Show('Search and select a software first. Package Cache scoring uses the selected product metadata.','Uninstall String Tool v2.0','OK','Information') | Out-Null
+            [System.Windows.Forms.MessageBox]::Show('Search and select a software first. Package Cache scoring uses the selected product metadata.','Application Installer Analyzer v2.2','OK','Information') | Out-Null
             return
         }
         $programs = @(Get-InstalledPrograms -Filter $term)
@@ -636,11 +852,11 @@ $btnCache.Add_Click({
     $n = 0
     foreach ($c in $candidates) {
         $n++
-        $label = "Score $($c.Score) | $($c.Path) | $($c.CompanyName) | $($c.ProductName)"
+        $label = "Affinity $($c.Affinity)% [$($c.Confidence)] | $($c.Path) | $($c.CompanyName) | $($c.ProductName)"
         $lstCache.Items.Add($label) | Out-Null
         $script:cacheResults[$label] = $c
     }
-    $statusLabel.Text = "$($candidates.Count) Package Cache candidate(s) found. Highest scores are most relevant."
+    $statusLabel.Text = "$($candidates.Count) Package Cache candidate(s) found. Highest affinity is most relevant; same-vendor related components are intentionally penalized."
 })
 
 $lstCache.Add_DoubleClick({
@@ -648,13 +864,41 @@ $lstCache.Add_DoubleClick({
     $c = $script:cacheResults[[string]$lstCache.SelectedItem]
     if (-not $c) { return }
 
-    $isBentley = (($c.CompanyName -match '(?i)Bentley') -or ($c.ProductName -match '(?i)MicroStation') -or ($c.Path -match '(?i)MicroStation|Bentley'))
-    if ($isBentley) {
+    $candidateDetails = @(
+        "Package Cache candidate",
+        "-----------------------",
+        "Affinity   : $($c.Affinity)%",
+        "Confidence : $($c.Confidence)",
+        "Path       : $($c.Path)",
+        "Company    : $($c.CompanyName)",
+        "Product    : $($c.ProductName)",
+        "Description: $($c.Description)",
+        "Version    : $($c.Version)",
+        "Signature  : $($c.Signature)",
+        "Signer     : $($c.Signer)",
+        "Evidence   : $($c.Reasons)",
+        "Warnings   : $($c.Warnings)"
+    ) -join "`r`n"
+
+    $txtDetails.Text = $txtDetails.Text + "`r`n`r`n" + $candidateDetails
+
+    $selectedIsMicroStation = ($script:currentProgram -and ([string]$script:currentProgram.DisplayName -match '(?i)\bMicroStation\b'))
+    $candidateIsMicroStation = (([string]$c.ProductName -match '(?i)\bMicroStation\b') -or ([string]$c.Description -match '(?i)\bMicroStation\b') -or ([string]$c.Path -match '(?i)\bMicroStation\b'))
+
+    if ($selectedIsMicroStation -and $candidateIsMicroStation -and $c.Affinity -ge 75) {
         $txtSilent.Text = '"' + $c.Path + '" -Uninstall -Quiet'
-        $statusLabel.Text = 'Bentley/MicroStation Package Cache candidate selected; vendor uninstall pattern applied.'
-    } else {
+        $statusLabel.Text = 'High-confidence MicroStation cache candidate selected; uninstall pattern prepared.'
+    }
+    elseif ($c.Confidence -eq 'REJECT / RELATED COMPONENT') {
+        $txtSilent.Clear()
+        $statusLabel.Text = 'Related component rejected. No uninstall command generated.'
+        [System.Windows.Forms.MessageBox]::Show(
+            "This executable belongs to the same ecosystem/vendor but does not correlate strongly enough with the selected product.`r`n`r`nNo uninstall command was generated.",
+            'Candidate rejected','OK','Warning') | Out-Null
+    }
+    else {
         $txtSilent.Text = '"' + $c.Path + '"'
-        $statusLabel.Text = 'Candidate copied to command field without guessed silent switches.'
+        $statusLabel.Text = 'Candidate selected without guessed switches. Review evidence before use.'
     }
 })
 
