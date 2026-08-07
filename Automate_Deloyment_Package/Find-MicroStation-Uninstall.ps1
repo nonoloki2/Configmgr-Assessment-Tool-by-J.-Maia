@@ -1,4 +1,4 @@
-#requires -version 5.1
+﻿#requires -version 5.1
 <#
 .SYNOPSIS
     Localiza a linha/comando de desinstalação de produtos Bentley (MicroStation e afins),
