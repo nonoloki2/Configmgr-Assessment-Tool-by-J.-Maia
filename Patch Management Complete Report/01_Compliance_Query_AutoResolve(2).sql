@@ -65,24 +65,34 @@ DECLARE @MM   NVARCHAR(2) = RIGHT('0' + CAST(MONTH(@RefMonthFirstDay) AS NVARCHA
    3) RESOLUÇÃO DO ASSIGNMENT ID DO CICLO DE REFERÊNCIA
    ============================================================ */
 
-DECLARE @ExpectedDeploymentName NVARCHAR(200) =
-    REPLACE(REPLACE(@DeploymentNamePattern, '{YYYY}', @YYYY), '{MM}', @MM);
-
 DECLARE @AssignmentID INT;
 DECLARE @ResolvedDeploymentName NVARCHAR(256);
+
+/*
+   Comparação tolerante a espaços: em vez de exigir o texto idêntico
+   caractere a caractere, exige apenas o prefixo fixo do nome + o
+   ano + o mês aparecendo em ordem, ignorando diferenças de espaçamento
+   ao redor dos hífens.
+*/
+DECLARE @PatternPrefix NVARCHAR(200) = LTRIM(RTRIM(LEFT(@DeploymentNamePattern, CHARINDEX('{YYYY}', @DeploymentNamePattern) - 1)));
 
 SELECT TOP 1
     @AssignmentID = cia.AssignmentID,
     @ResolvedDeploymentName = cia.AssignmentName
 FROM v_CIAssignment AS cia
-WHERE cia.AssignmentName = @ExpectedDeploymentName
+WHERE cia.AssignmentName LIKE '%' + @PatternPrefix + '%' + @YYYY + '%' + @MM + '%'
 ORDER BY cia.AssignmentID DESC;
 
 IF @AssignmentID IS NULL
 BEGIN
+    DECLARE @Candidates NVARCHAR(MAX) = (
+        SELECT STRING_AGG(CAST(cia2.AssignmentName AS NVARCHAR(MAX)), ' | ')
+        FROM v_CIAssignment AS cia2
+        WHERE cia2.AssignmentName LIKE '%' + @YYYY + '%'
+    );
     RAISERROR(
-        'Nenhum deployment encontrado com o nome esperado "%s" para o ciclo %s-%s. Verifique se o SUG do mês já foi criado no console ou se a convenção de nome mudou.',
-        16, 1, @ExpectedDeploymentName, @YYYY, @MM
+        'Nenhum deployment encontrado batendo com prefixo "%s" + ano %s + mes %s. Deployments de %s encontrados no console: %s',
+        16, 1, @PatternPrefix, @YYYY, @MM, @YYYY, @Candidates
     );
     RETURN;
 END
