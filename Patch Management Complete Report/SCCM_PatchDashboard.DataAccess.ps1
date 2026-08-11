@@ -185,8 +185,14 @@ function Get-SqlComplianceRows {
         }
 
         $errorCodeValue = [UInt64]0
-        if ($deploymentStatus -eq 'Error' -and $r.Error_Code_ExitCode -ne [DBNull]::Value -and $r.Error_Code_ExitCode) {
-            try { $errorCodeValue = [UInt64][int64]$r.Error_Code_ExitCode } catch { $errorCodeValue = 0 }
+        if ($deploymentStatus -eq 'Error' -and $r.Hex_Error_Code -ne [DBNull]::Value -and $r.Hex_Error_Code) {
+            $hexStr = [string]$r.Hex_Error_Code
+            if ($hexStr -match '^0x[0-9A-Fa-f]+$') {
+                try { $errorCodeValue = [Convert]::ToUInt64($hexStr.Substring(2), 16) }
+                catch { Write-Log $LogPath "Falha ao converter Hex_Error_Code '$hexStr' para numero (device $([string]$r.ComputerName))." 'WARN' }
+            } else {
+                Write-Log $LogPath "Hex_Error_Code em formato inesperado: '$hexStr' (device $([string]$r.ComputerName))." 'WARN'
+            }
         }
         $errorDetail = if ($errorCodeValue -ne 0) {
             Get-ErrorDetail -Code $errorCodeValue -LastEnforcementMessage '' -StatusDescription ''
