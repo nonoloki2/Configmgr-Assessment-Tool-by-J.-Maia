@@ -1,18 +1,29 @@
 ﻿function ConvertTo-NormalizedDeploymentStatus {
     <#
         Mapeia o Status_State (texto vindo de v_StateNames) para os 4
-        buckets que o dashboard já usa hoje: Success / InProgress / Error / Unknown.
-        Qualquer valor não mapeado cai em Unknown (e é logado), nunca quebra o dashboard.
+        buckets do dashboard: Success / InProgress / Error / Unknown.
+        Baseado nos valores REAIS confirmados no ambiente (via
+        03_Diagnostico_Status_State.sql), nao mais em suposicao.
+        Qualquer valor novo/nao previsto cai em Unknown (e eh logado).
     #>
     param([string]$StatusState, [string]$LogPath)
 
     if ([string]::IsNullOrWhiteSpace($StatusState)) { return 'Unknown' }
 
-    switch -Regex ($StatusState.Trim()) {
-        '^(Success|Compliant|Succeeded|Installed)$'            { return 'Success' }
-        '^(In Progress|InProgress|Downloading|Installing|Waiting.*)$' { return 'InProgress' }
-        '^(Error|Failed|Non-?Compliant.*Error)$'                { return 'Error' }
-        '^(Unknown|Requirements Not Met|Not Applicable|Non-?Compliant)$' { return 'Unknown' }
+    switch ($StatusState.Trim()) {
+        'Compliant'                       { return 'Success' }
+        'Successfully installed update(s)' { return 'Success' }
+
+        'Failed to install update(s)'     { return 'Error' }
+        'Failed to download update(s)'    { return 'Error' }
+
+        'Downloaded update(s)'            { return 'InProgress' }
+        'Pending system restart'          { return 'InProgress' }
+        'Waiting for restart'             { return 'InProgress' }
+
+        'Enforcement state unknown'       { return 'Unknown' }
+        'Non-compliant'                   { return 'Unknown' }
+
         default {
             if ($LogPath) { Write-Log $LogPath "Status_State '$StatusState' sem mapeamento conhecido; tratado como Unknown." 'WARN' }
             return 'Unknown'
