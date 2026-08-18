@@ -370,48 +370,144 @@ $script:InstallWorker = {
         }
 
         # -------------------------------------------------------------------
-        # Instalacao
+        # Instalacao v2.3 - EXECUCAO LOCAL COMO NT AUTHORITY\SYSTEM
+        #
+        # O WinRM continua sendo usado apenas como canal de controle.
+        # O WUSA/DISM NAO e iniciado dentro da sessao WinRM. Em vez disso,
+        # criamos uma Scheduled Task temporaria no endpoint, executada por
+        # SYSTEM + Highest Privileges, aguardamos o termino e lemos o exit code.
         # -------------------------------------------------------------------
-        Set-Stage 'Instalando' "Executando instalador no host (copia: $copyMethod)..."
+        Set-Stage 'Instalando SYSTEM' "Criando tarefa local como SYSTEM (copia: $copyMethod)..."
 
-        $exitCode = Invoke-Command -Session $session -ScriptBlock {
+        $systemResult = Invoke-Command -Session $session -ScriptBlock {
             param($pkgPath, $ext)
 
             if (-not (Test-Path -LiteralPath $pkgPath -PathType Leaf)) {
-                return -2
+                return [PSCustomObject]@{
+                    ExitCode = -2
+                    Detail   = "Pacote nao encontrado no endpoint: $pkgPath"
+                    TaskName = $null
+                }
             }
 
-            if ($ext -eq '.msu') {
-                # Caminho remoto nao contem espacos por padrao, mas a construcao
-                # continua segura usando ArgumentList separado.
-                $p = Start-Process `
-                    -FilePath "$env:SystemRoot\System32\wusa.exe" `
-                    -ArgumentList @($pkgPath, '/quiet', '/norestart') `
-                    -Wait `
-                    -PassThru `
-                    -ErrorAction Stop
-            }
-            elseif ($ext -eq '.cab') {
-                $p = Start-Process `
-                    -FilePath "$env:SystemRoot\System32\dism.exe" `
-                    -ArgumentList @('/Online', '/Add-Package', "/PackagePath:$pkgPath", '/NoRestart', '/Quiet') `
-                    -Wait `
-                    -PassThru `
-                    -ErrorAction Stop
-            }
-            else {
-                throw "Extensao de pacote nao suportada: $ext"
-            }
+            $taskName = "PSHPatcher_SYSTEM_$([Guid]::NewGuid().ToString('N'))"
+            $taskPath = '\PSHPatcher\'
+            $registered = $false
 
-            return [int]$p.ExitCode
+            try {
+                # Garante que o modulo ScheduledTasks esta disponivel.
+                Import-Module ScheduledTasks -ErrorAction Stop
+
+                if ($ext -eq '.msu') {
+                    $exe  = "$env:SystemRoot\System32\wusa.exe"
+                    $args = "`"$pkgPath`" /quiet /norestart"
+                }
+                elseif ($ext -eq '.cab') {
+                    $exe  = "$env:SystemRoot\System32\dism.exe"
+                    $args = "/Online /Add-Package /PackagePath:`"$pkgPath`" /NoRestart /Quiet"
+                }
+                else {
+                    throw "Extensao de pacote nao suportada: $ext"
+                }
+
+                # Action executa o instalador diretamente; assim LastTaskResult
+                # recebe o exit code real do WUSA/DISM.
+                $action = New-ScheduledTaskAction `
+                    -Execute $exe `
+                    -Argument $args
+
+                $principal = New-ScheduledTaskPrincipal `
+                    -UserId 'SYSTEM' `
+                    -LogonType ServiceAccount `
+                    -RunLevel Highest
+
+                $settings = New-ScheduledTaskSettingsSet `
+                    -AllowStartIfOnBatteries `
+                    -DontStopIfGoingOnBatteries `
+                    -ExecutionTimeLimit (New-TimeSpan -Hours 3) `
+                    -MultipleInstances IgnoreNew
+
+                Register-ScheduledTask `
+                    -TaskName $taskName `
+                    -TaskPath $taskPath `
+                    -Action $action `
+                    -Principal $principal `
+                    -Settings $settings `
+                    -Force `
+                    -ErrorAction Stop | Out-Null
+
+                $registered = $true
+
+                # Marca o instante de inicio para evitar ler resultado antigo.
+                $startedAt = Get-Date
+                Start-ScheduledTask -TaskName $taskName -TaskPath $taskPath -ErrorAction Stop
+
+                # Aguarda a task realmente entrar em execucao (ate 30 s).
+                $enteredRunning = $false
+                $waitStart = Get-Date
+                do {
+                    Start-Sleep -Milliseconds 500
+                    $task = Get-ScheduledTask -TaskName $taskName -TaskPath $taskPath -ErrorAction Stop
+                    if ($task.State -eq 'Running') {
+                        $enteredRunning = $true
+                        break
+                    }
+                } while (((Get-Date) - $waitStart).TotalSeconds -lt 30)
+
+                # Aguarda termino. CU pode levar bastante tempo.
+                $deadline = (Get-Date).AddHours(3)
+                do {
+                    Start-Sleep -Seconds 2
+                    $task = Get-ScheduledTask -TaskName $taskName -TaskPath $taskPath -ErrorAction Stop
+                    $info = Get-ScheduledTaskInfo -TaskName $taskName -TaskPath $taskPath -ErrorAction Stop
+
+                    # Terminou quando:
+                    # - nao esta Running; e
+                    # - existe uma execucao posterior ao Start-ScheduledTask.
+                    $hasFreshRun = ($info.LastRunTime -ge $startedAt.AddSeconds(-2))
+                    if ($task.State -ne 'Running' -and $hasFreshRun) {
+                        break
+                    }
+
+                    if ((Get-Date) -ge $deadline) {
+                        throw 'Timeout de 3 horas aguardando a instalacao SYSTEM.'
+                    }
+                } while ($true)
+
+                # LastTaskResult e UInt32 em alguns hosts. Converter preservando
+                # os codigos positivos de WUSA/DISM usados pelo dashboard.
+                $rawResult = [uint32]$info.LastTaskResult
+                $exitCode = [int64]$rawResult
+
+                return [PSCustomObject]@{
+                    ExitCode = $exitCode
+                    Detail   = "Executado como NT AUTHORITY\SYSTEM. Task=$taskPath$taskName"
+                    TaskName = "$taskPath$taskName"
+                }
+            }
+            catch {
+                return [PSCustomObject]@{
+                    ExitCode = -3
+                    Detail   = "Falha na execucao SYSTEM: $($_.Exception.Message)"
+                    TaskName = "$taskPath$taskName"
+                }
+            }
+            finally {
+                if ($registered) {
+                    # A task e descartavel; o pacote so sera apagado pelo caller
+                    # quando o resultado for considerado sucesso.
+                    Unregister-ScheduledTask `
+                        -TaskName $taskName `
+                        -TaskPath $taskPath `
+                        -Confirm:$false `
+                        -ErrorAction SilentlyContinue
+                }
+            }
         } -ArgumentList $remotePath, $Extension -ErrorAction Stop
 
-        Set-Stage 'Limpando' 'Removendo pacote temporario do host...'
-        Invoke-Command -Session $session -ScriptBlock {
-            param($p)
-            Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue
-        } -ArgumentList $remotePath -ErrorAction SilentlyContinue
+        $exitCode = [int64]$systemResult.ExitCode
 
+        # WUSA/DISM: codigos aceitos pelo comportamento anterior da ferramenta.
         $rebootNeeded = ($exitCode -eq 3010)
         $success = (
             $exitCode -eq 0 -or
@@ -419,8 +515,28 @@ $script:InstallWorker = {
             $exitCode -eq 2359302
         )
 
+        if ($success) {
+            Set-Stage 'Limpando' 'Instalacao concluida; removendo pacote temporario...'
+            Invoke-Command -Session $session -ScriptBlock {
+                param($p)
+                Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue
+            } -ArgumentList $remotePath -ErrorAction SilentlyContinue
+        }
+        else {
+            # IMPORTANTE: em erro, preserva o MSU/CAB para diagnostico.
+            Set-Stage 'Preservando pacote' "Falha na instalacao; pacote mantido em $remotePath"
+        }
+
         $finalStatus = if ($success) { 'Sucesso' } else { 'Erro' }
-        Set-Stage $finalStatus "Instalacao finalizada. Exit code: $exitCode"
+
+        $detail = if ($success) {
+            "Instalacao SYSTEM finalizada. Exit code: $exitCode"
+        }
+        else {
+            "Exit code $exitCode | $($systemResult.Detail) | Pacote preservado: $remotePath"
+        }
+
+        Set-Stage $finalStatus $detail
 
         [PSCustomObject]@{
             HostName      = $HostName
@@ -430,7 +546,7 @@ $script:InstallWorker = {
             RemotePath    = $remotePath
             CopyMethod    = $copyMethod
             Status        = $finalStatus
-            Detail        = $null
+            Detail        = $detail
         }
     }
     catch {
@@ -463,7 +579,7 @@ $script:InstallWorker = {
 # ===========================================================================
 
 $form                  = New-Object System.Windows.Forms.Form
-$form.Text             = 'PSHPatcher v2.2 - Windows CU Remote Installer'
+$form.Text             = 'PSHPatcher v2.3 SYSTEM - Windows CU Remote Installer'
 $form.Size             = New-Object System.Drawing.Size(1180, 760)
 $form.StartPosition    = 'CenterScreen'
 $form.MinimumSize      = New-Object System.Drawing.Size(900, 550)
