@@ -207,7 +207,7 @@ $script:PreflightWorker = {
 #   6. Confirma no host remoto que tamanho do arquivo copiado = tamanho da origem.
 # ---------------------------------------------------------------------------
 $script:InstallWorker = {
-    param($HostName, $Credential, $LocalFilePath, $FileName, $Extension, $SyncHash)
+    param($HostName, $Credential, $LocalFilePath, $FileName, $Extension, $KBNumber, $SyncHash)
 
     function Set-Stage($status, $detail) {
         $SyncHash[$HostName] = @{
@@ -629,13 +629,67 @@ catch {
 
         $exitCode = [int64]$systemResult.ExitCode
 
-        # WUSA/DISM: codigos aceitos pelo comportamento anterior da ferramenta.
-        $rebootNeeded = ($exitCode -eq 3010)
-        $success = (
-            $exitCode -eq 0 -or
-            $exitCode -eq 3010 -or
-            $exitCode -eq 2359302
-        )
+        # v2.5: o estado real do endpoint passa a ser a fonte final de verdade.
+        Set-Stage 'Verificando KB' "Confirmando $KBNumber no Windows..."
+
+        $verification = Invoke-Command -Session $session -ScriptBlock {
+            param($kb)
+
+            $found = $false
+            $installedOn = $null
+            $source = $null
+
+            try {
+                $qfe = Get-CimInstance Win32_QuickFixEngineering -ErrorAction Stop |
+                    Where-Object { $_.HotFixID -eq $kb } |
+                    Select-Object -First 1
+                if ($qfe) {
+                    $found = $true
+                    $installedOn = $qfe.InstalledOn
+                    $source = 'Win32_QuickFixEngineering'
+                }
+            } catch {}
+
+            if (-not $found) {
+                try {
+                    $hf = Get-HotFix -Id $kb -ErrorAction Stop
+                    if ($hf) {
+                        $found = $true
+                        $installedOn = $hf.InstalledOn
+                        $source = 'Get-HotFix'
+                    }
+                } catch {}
+            }
+
+            if (-not $found) {
+                try {
+                    $needle = $kb -replace '^KB',''
+                    $dismOutput = & "$env:SystemRoot\System32\dism.exe" /Online /Get-Packages /Format:Table 2>$null
+                    if ($LASTEXITCODE -eq 0 -and ($dismOutput -match [regex]::Escape($needle))) {
+                        $found = $true
+                        $source = 'DISM'
+                    }
+                } catch {}
+            }
+
+            $reboot = $false
+            try {
+                if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') { $reboot = $true }
+                if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired') { $reboot = $true }
+            } catch {}
+
+            [PSCustomObject]@{
+                Installed = $found
+                InstalledOn = $installedOn
+                Source = $source
+                RebootPending = $reboot
+            }
+        } -ArgumentList $KBNumber -ErrorAction Stop
+
+        $kbConfirmed = [bool]$verification.Installed
+        $successByExitCode = ($exitCode -eq 0 -or $exitCode -eq 3010 -or $exitCode -eq 2359302)
+        $success = ($kbConfirmed -or $successByExitCode)
+        $rebootNeeded = ([bool]$verification.RebootPending -or $exitCode -eq 3010)
 
         if ($success) {
             Set-Stage 'Limpando' 'Instalacao concluida; removendo pacote temporario...'
@@ -649,13 +703,19 @@ catch {
             Set-Stage 'Preservando pacote' "Falha na instalacao; pacote mantido em $remotePath"
         }
 
-        $finalStatus = if ($success) { 'Sucesso' } else { 'Erro' }
-
-        $detail = if ($success) {
-            "Instalacao SYSTEM finalizada. Exit code: $exitCode"
+        # Mesmo que a task/runner tenha retornado algo inesperado, KB confirmado
+        # no Windows prevalece e a GUI informa sucesso.
+        if ($kbConfirmed) {
+            $finalStatus = 'Sucesso'
+            $detail = "$KBNumber INSTALADO e confirmado via $($verification.Source). SYSTEM Exit=$exitCode"
+        }
+        elseif ($successByExitCode) {
+            $finalStatus = 'Pendente'
+            $detail = "Exit=$exitCode indica conclusao, mas $KBNumber ainda nao foi confirmado no Windows."
         }
         else {
-            "Exit code $exitCode | $($systemResult.Detail) | Pacote preservado: $remotePath"
+            $finalStatus = 'Erro'
+            $detail = "Exit=$exitCode | $KBNumber NAO confirmado | $($systemResult.Detail) | Pacote preservado: $remotePath"
         }
 
         Set-Stage $finalStatus $detail
@@ -701,7 +761,7 @@ catch {
 # ===========================================================================
 
 $form                  = New-Object System.Windows.Forms.Form
-$form.Text             = 'PSHPatcher v2.4 SYSTEM Runner - Windows CU Remote Installer'
+$form.Text             = 'PSHPatcher v2.5 Verified SYSTEM - Windows CU Remote Installer'
 $form.Size             = New-Object System.Drawing.Size(1180, 760)
 $form.StartPosition    = 'CenterScreen'
 $form.MinimumSize      = New-Object System.Drawing.Size(900, 550)
@@ -1027,6 +1087,7 @@ $btnInstall.Add_Click({
         LocalFilePath  = $script:UpdateFilePath
         FileName       = $script:UpdateInfo.FileName
         Extension      = $script:UpdateInfo.Extension
+        KBNumber       = $script:UpdateInfo.KB
         SyncHash       = $script:SyncHash
     })
     $timer.Start()
