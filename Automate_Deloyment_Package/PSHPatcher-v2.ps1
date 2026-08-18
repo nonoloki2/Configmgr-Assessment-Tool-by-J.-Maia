@@ -205,6 +205,7 @@ $script:InstallWorker = {
     }
 
     $session = $null
+    $psdrive = $null
     try {
         Set-Stage 'Conectando' 'Abrindo sessao remota (PSSession)...'
         $hasCred = ($Credential -is [System.Management.Automation.PSCredential])
@@ -212,13 +213,23 @@ $script:InstallWorker = {
         if ($hasCred) { $sParams.Credential = $Credential }
         $session = New-PSSession @sParams
 
-        Set-Stage 'Copiando' "Copiando $FileName para o host..."
-        Invoke-Command -Session $session -ScriptBlock {
-            $dir = 'C:\Temp\PSHPatcher'
-            if (-not (Test-Path $dir)) { New-Item -Path $dir -ItemType Directory -Force | Out-Null }
+        # Copia via SMB (admin share C$) em vez de WinRM -ToSession.
+        # Para pacotes grandes (CUs costumam passar de 1 GB), a copia via
+        # WinRM e muito mais lenta e propensa a estourar o timeout da sessao;
+        # SMB puro e ordens de grandeza mais rapido e confiavel.
+        Set-Stage 'Copiando' "Copiando $FileName para o host (via admin share C`$)..."
+        $uncDir  = "\\$HostName\C`$\Temp\PSHPatcher"
+        $uncFile = "$uncDir\$FileName"
+        if ($hasCred) {
+            $driveName = "PSHT_$(($HostName -replace '[^a-zA-Z0-9]','').Substring(0,[Math]::Min(10,($HostName -replace '[^a-zA-Z0-9]','').Length)))"
+            $psdrive = New-PSDrive -Name $driveName -PSProvider FileSystem -Root "\\$HostName\C`$" -Credential $Credential -Scope Script -ErrorAction Stop
         }
-        $remotePath = "C:\Temp\PSHPatcher\$FileName"
-        Copy-Item -Path $LocalFilePath -Destination $remotePath -ToSession $session -Force
+        if (-not (Test-Path -LiteralPath $uncDir)) {
+            New-Item -Path $uncDir -ItemType Directory -Force -ErrorAction Stop | Out-Null
+        }
+        Copy-Item -Path $LocalFilePath -Destination $uncFile -Force -ErrorAction Stop
+
+        $remotePath = "C:\Temp\PSHPatcher\$FileName"   # caminho LOCAL no host (usado para rodar wusa/dism)
 
         Set-Stage 'Instalando' 'Executando instalador no host (isso pode levar alguns minutos)...'
         $exitCode = Invoke-Command -Session $session -ScriptBlock {
@@ -265,6 +276,7 @@ $script:InstallWorker = {
         }
     }
     finally {
+        if ($psdrive) { Remove-PSDrive -Name $psdrive.Name -Force -ErrorAction SilentlyContinue }
         if ($session) { Remove-PSSession -Session $session -ErrorAction SilentlyContinue }
     }
 }
