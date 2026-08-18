@@ -1,4 +1,4 @@
-#requires -Version 5.1
+﻿#requires -Version 5.1
 <#
     PSHPatcher v2 - Windows Update CU Remote Installer
     Interface grafica (WinForms) para checagem e instalacao remota de
@@ -196,64 +196,231 @@ $script:PreflightWorker = {
 
 # ---------------------------------------------------------------------------
 # Worker de INSTALACAO (copia o pacote e executa wusa/DISM remotamente)
+#
+# v2.1 FIX:
+#   1. Valida o arquivo local antes de iniciar.
+#   2. Cria C:\Temp\PSHPatcher pelo proprio PSSession.
+#   3. Tenta SMB primeiro para desempenho.
+#   4. Quando ha credencial alternativa, usa de fato o PSDrive mapeado
+#      (o codigo anterior criava o drive, mas continuava copiando pelo UNC bruto).
+#   5. Se SMB/C$ falhar, faz fallback automatico para Copy-Item -ToSession.
+#   6. Confirma no host remoto que tamanho do arquivo copiado = tamanho da origem.
 # ---------------------------------------------------------------------------
 $script:InstallWorker = {
     param($HostName, $Credential, $LocalFilePath, $FileName, $Extension, $SyncHash)
 
     function Set-Stage($status, $detail) {
-        $SyncHash[$HostName] = @{ Status = $status; Detail = $detail; Stage = $status }
+        $SyncHash[$HostName] = @{
+            Status = $status
+            Detail = $detail
+            Stage  = $status
+        }
     }
 
     $session = $null
     $psdrive = $null
+    $copyMethod = $null
+
     try {
+        # O erro exibido na v2 vinha daqui em varios cenarios:
+        # o runspace chegava ao Copy-Item com uma origem que nao podia ser resolvida.
+        Set-Stage 'Validando' 'Validando arquivo de update na maquina de origem...'
+
+        if ([string]::IsNullOrWhiteSpace($LocalFilePath)) {
+            throw 'O caminho local do pacote esta vazio.'
+        }
+
+        if (-not (Test-Path -LiteralPath $LocalFilePath -PathType Leaf)) {
+            throw "Arquivo de update nao encontrado na maquina de origem: $LocalFilePath"
+        }
+
+        $localItem = Get-Item -LiteralPath $LocalFilePath -ErrorAction Stop
+        $localLength = [int64]$localItem.Length
+
         Set-Stage 'Conectando' 'Abrindo sessao remota (PSSession)...'
+
         $hasCred = ($Credential -is [System.Management.Automation.PSCredential])
-        $sParams = @{ ComputerName = $HostName; ErrorAction = 'Stop' }
-        if ($hasCred) { $sParams.Credential = $Credential }
+        $sParams = @{
+            ComputerName = $HostName
+            ErrorAction  = 'Stop'
+        }
+        if ($hasCred) {
+            $sParams.Credential = $Credential
+        }
+
         $session = New-PSSession @sParams
 
-        # Copia via SMB (admin share C$) em vez de WinRM -ToSession.
-        # Para pacotes grandes (CUs costumam passar de 1 GB), a copia via
-        # WinRM e muito mais lenta e propensa a estourar o timeout da sessao;
-        # SMB puro e ordens de grandeza mais rapido e confiavel.
-        Set-Stage 'Copiando' "Copiando $FileName para o host (via admin share C`$)..."
-        $uncDir  = "\\$HostName\C`$\Temp\PSHPatcher"
-        $uncFile = "$uncDir\$FileName"
-        if ($hasCred) {
-            $driveName = "PSHT_$(($HostName -replace '[^a-zA-Z0-9]','').Substring(0,[Math]::Min(10,($HostName -replace '[^a-zA-Z0-9]','').Length)))"
-            $psdrive = New-PSDrive -Name $driveName -PSProvider FileSystem -Root "\\$HostName\C`$" -Credential $Credential -Scope Script -ErrorAction Stop
-        }
-        if (-not (Test-Path -LiteralPath $uncDir)) {
-            New-Item -Path $uncDir -ItemType Directory -Force -ErrorAction Stop | Out-Null
-        }
-        Copy-Item -Path $LocalFilePath -Destination $uncFile -Force -ErrorAction Stop
+        $remoteDir  = 'C:\Temp\PSHPatcher'
+        $remotePath = Join-Path $remoteDir $FileName
 
-        $remotePath = "C:\Temp\PSHPatcher\$FileName"   # caminho LOCAL no host (usado para rodar wusa/dism)
+        # A pasta remota e criada pelo WinRM. Isso evita depender de C$ apenas
+        # para criar a estrutura.
+        Set-Stage 'Preparando' 'Criando pasta temporaria no host...'
+        Invoke-Command -Session $session -ScriptBlock {
+            param($dir)
+            if (-not (Test-Path -LiteralPath $dir)) {
+                New-Item -Path $dir -ItemType Directory -Force -ErrorAction Stop | Out-Null
+            }
+        } -ArgumentList $remoteDir -ErrorAction Stop
 
-        Set-Stage 'Instalando' 'Executando instalador no host (isso pode levar alguns minutos)...'
+        # -------------------------------------------------------------------
+        # Copia principal: SMB/C$ (mais rapido para CU de 1 GB+)
+        # -------------------------------------------------------------------
+        $smbCopied = $false
+        try {
+            Set-Stage 'Copiando' "Copiando $FileName via SMB (C`$)..."
+
+            if ($hasCred) {
+                # IMPORTANTE: se uma credencial alternativa foi fornecida,
+                # usamos o caminho DO PSDrive. O codigo anterior mapeava um drive
+                # e depois ignorava o drive, copiando pelo UNC bruto.
+                $safeHost = ($HostName -replace '[^a-zA-Z0-9]', '')
+                if ([string]::IsNullOrWhiteSpace($safeHost)) { $safeHost = 'HOST' }
+                if ($safeHost.Length -gt 8) { $safeHost = $safeHost.Substring(0, 8) }
+
+                $driveName = "P$($safeHost)$([Guid]::NewGuid().ToString('N').Substring(0,4))"
+                $psdrive = New-PSDrive `
+                    -Name $driveName `
+                    -PSProvider FileSystem `
+                    -Root "\\$HostName\C`$" `
+                    -Credential $Credential `
+                    -Scope Local `
+                    -ErrorAction Stop
+
+                $destDir  = "$($psdrive.Name):\Temp\PSHPatcher"
+                $destFile = Join-Path $destDir $FileName
+
+                if (-not (Test-Path -LiteralPath $destDir)) {
+                    New-Item -Path $destDir -ItemType Directory -Force -ErrorAction Stop | Out-Null
+                }
+
+                Copy-Item `
+                    -LiteralPath $LocalFilePath `
+                    -Destination $destFile `
+                    -Force `
+                    -ErrorAction Stop
+            }
+            else {
+                $uncDir  = "\\$HostName\C`$\Temp\PSHPatcher"
+                $uncFile = Join-Path $uncDir $FileName
+
+                if (-not (Test-Path -LiteralPath $uncDir)) {
+                    New-Item -Path $uncDir -ItemType Directory -Force -ErrorAction Stop | Out-Null
+                }
+
+                Copy-Item `
+                    -LiteralPath $LocalFilePath `
+                    -Destination $uncFile `
+                    -Force `
+                    -ErrorAction Stop
+            }
+
+            $smbCopied = $true
+            $copyMethod = 'SMB'
+        }
+        catch {
+            # C$ pode estar bloqueado, UAC remoto pode limitar admin share,
+            # ou ja pode existir uma conexao SMB com outra credencial.
+            # Nesses casos, WinRM ja esta aberto: fazemos fallback automatico.
+            $smbError = $_.Exception.Message
+            Set-Stage 'Copiando' "SMB indisponivel. Tentando copia pelo WinRM..."
+        }
+
+        # -------------------------------------------------------------------
+        # Fallback: copia pela PSSession
+        # -------------------------------------------------------------------
+        if (-not $smbCopied) {
+            try {
+                Copy-Item `
+                    -LiteralPath $LocalFilePath `
+                    -Destination $remotePath `
+                    -ToSession $session `
+                    -Force `
+                    -ErrorAction Stop
+
+                $copyMethod = 'WinRM'
+            }
+            catch {
+                $winrmCopyError = $_.Exception.Message
+                throw "Falha ao copiar o pacote. SMB: $smbError | WinRM: $winrmCopyError"
+            }
+        }
+
+        # Confirma existencia e tamanho antes de executar qualquer instalador.
+        Set-Stage 'Validando copia' 'Confirmando integridade basica do arquivo copiado...'
+
+        $remoteFileInfo = Invoke-Command -Session $session -ScriptBlock {
+            param($path)
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+                return $null
+            }
+            $item = Get-Item -LiteralPath $path -ErrorAction Stop
+            [PSCustomObject]@{
+                Exists = $true
+                Length = [int64]$item.Length
+            }
+        } -ArgumentList $remotePath -ErrorAction Stop
+
+        if (-not $remoteFileInfo -or -not $remoteFileInfo.Exists) {
+            throw "O pacote nao foi encontrado no host apos a copia: $remotePath"
+        }
+
+        if ([int64]$remoteFileInfo.Length -ne $localLength) {
+            throw "Copia incompleta: origem=$localLength bytes; destino=$($remoteFileInfo.Length) bytes."
+        }
+
+        # -------------------------------------------------------------------
+        # Instalacao
+        # -------------------------------------------------------------------
+        Set-Stage 'Instalando' "Executando instalador no host (copia: $copyMethod)..."
+
         $exitCode = Invoke-Command -Session $session -ScriptBlock {
             param($pkgPath, $ext)
 
-            if (-not (Test-Path -LiteralPath $pkgPath)) {
-                return -2   # sentinela: pacote nao encontrado no host apos a copia
+            if (-not (Test-Path -LiteralPath $pkgPath -PathType Leaf)) {
+                return -2
             }
 
             if ($ext -eq '.msu') {
-                # Lista de argumentos como array: o Start-Process cuida da citacao,
-                # evitando erros de sintaxe (ex: exit code 123 / ERROR_INVALID_NAME)
-                $p = Start-Process -FilePath 'wusa.exe' -ArgumentList @($pkgPath, '/quiet', '/norestart') -Wait -PassThru
-            } else {
-                $p = Start-Process -FilePath 'dism.exe' -ArgumentList @('/Online', '/Add-Package', "/PackagePath:$pkgPath", '/NoRestart', '/Quiet') -Wait -PassThru
+                # Caminho remoto nao contem espacos por padrao, mas a construcao
+                # continua segura usando ArgumentList separado.
+                $p = Start-Process `
+                    -FilePath "$env:SystemRoot\System32\wusa.exe" `
+                    -ArgumentList @($pkgPath, '/quiet', '/norestart') `
+                    -Wait `
+                    -PassThru `
+                    -ErrorAction Stop
             }
-            return $p.ExitCode
-        } -ArgumentList $remotePath, $Extension
+            elseif ($ext -eq '.cab') {
+                $p = Start-Process `
+                    -FilePath "$env:SystemRoot\System32\dism.exe" `
+                    -ArgumentList @('/Online', '/Add-Package', "/PackagePath:$pkgPath", '/NoRestart', '/Quiet') `
+                    -Wait `
+                    -PassThru `
+                    -ErrorAction Stop
+            }
+            else {
+                throw "Extensao de pacote nao suportada: $ext"
+            }
+
+            return [int]$p.ExitCode
+        } -ArgumentList $remotePath, $Extension -ErrorAction Stop
 
         Set-Stage 'Limpando' 'Removendo pacote temporario do host...'
-        Invoke-Command -Session $session -ScriptBlock { param($p) Remove-Item -Path $p -Force -ErrorAction SilentlyContinue } -ArgumentList $remotePath
+        Invoke-Command -Session $session -ScriptBlock {
+            param($p)
+            Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue
+        } -ArgumentList $remotePath -ErrorAction SilentlyContinue
 
         $rebootNeeded = ($exitCode -eq 3010)
-        $success = ($exitCode -eq 0 -or $exitCode -eq 3010 -or $exitCode -eq 2359302)
+        $success = (
+            $exitCode -eq 0 -or
+            $exitCode -eq 3010 -or
+            $exitCode -eq 2359302
+        )
+
+        $finalStatus = if ($success) { 'Sucesso' } else { 'Erro' }
+        Set-Stage $finalStatus "Instalacao finalizada. Exit code: $exitCode"
 
         [PSCustomObject]@{
             HostName      = $HostName
@@ -261,23 +428,33 @@ $script:InstallWorker = {
             Success       = $success
             RebootPending = $rebootNeeded
             RemotePath    = $remotePath
-            Status        = if ($success) { 'Sucesso' } else { 'Erro' }
-            Detail        = $null   # preenchido pelo chamador via Get-FriendlyExitDetail
+            CopyMethod    = $copyMethod
+            Status        = $finalStatus
+            Detail        = $null
         }
     }
     catch {
+        $msg = $_.Exception.Message
+        Set-Stage 'Erro' $msg
+
         [PSCustomObject]@{
             HostName      = $HostName
             ExitCode      = -1
             Success       = $false
             RebootPending = $null
+            RemotePath    = $null
+            CopyMethod    = $copyMethod
             Status        = 'Erro'
-            Detail        = $_.Exception.Message
+            Detail        = $msg
         }
     }
     finally {
-        if ($psdrive) { Remove-PSDrive -Name $psdrive.Name -Force -ErrorAction SilentlyContinue }
-        if ($session) { Remove-PSSession -Session $session -ErrorAction SilentlyContinue }
+        if ($psdrive) {
+            Remove-PSDrive -Name $psdrive.Name -Force -ErrorAction SilentlyContinue
+        }
+        if ($session) {
+            Remove-PSSession -Session $session -ErrorAction SilentlyContinue
+        }
     }
 }
 
@@ -550,6 +727,16 @@ $btnCheckHosts.Add_Click({
 $btnInstall.Add_Click({
     if (-not $script:UpdateFilePath) {
         [System.Windows.Forms.MessageBox]::Show('Selecione o arquivo de update (.msu/.cab) primeiro.', 'PSHPatcher') | Out-Null
+        return
+    }
+
+    if (-not (Test-Path -LiteralPath $script:UpdateFilePath -PathType Leaf)) {
+        [System.Windows.Forms.MessageBox]::Show(
+            "O arquivo selecionado nao existe mais ou nao esta acessivel:`r`n`r`n$($script:UpdateFilePath)`r`n`r`nSelecione o pacote novamente.",
+            'PSHPatcher - arquivo nao encontrado',
+            'OK',
+            'Error'
+        ) | Out-Null
         return
     }
     if ($grid.Rows.Count -eq 0) { Initialize-GridRows }
