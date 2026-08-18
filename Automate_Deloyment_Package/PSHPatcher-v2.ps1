@@ -90,10 +90,12 @@ function Get-FriendlyExitDetail {
         3010     { return 'Instalado - reinicio necessario' }
         2359302  { return 'Update ja instalado (WU_S_ALREADY_INSTALLED)' }
         87       { return 'Parametro invalido para o instalador' }
+        123      { return 'Erro 123 (ERROR_INVALID_NAME) - sintaxe do caminho do pacote invalida no host' }
         1642     { return 'Pacote nao aplicavel a este SO' }
         1603     { return 'Erro fatal na instalacao' }
         1618     { return 'Outra instalacao em andamento no host' }
         -1       { return 'Falha de comunicacao/timeout' }
+        -2       { return 'Pacote nao encontrado no host apos a copia (falha silenciosa no Copy-Item)' }
         default  { return "Exit code $ExitCode" }
     }
 }
@@ -221,10 +223,17 @@ $script:InstallWorker = {
         Set-Stage 'Instalando' 'Executando instalador no host (isso pode levar alguns minutos)...'
         $exitCode = Invoke-Command -Session $session -ScriptBlock {
             param($pkgPath, $ext)
+
+            if (-not (Test-Path -LiteralPath $pkgPath)) {
+                return -2   # sentinela: pacote nao encontrado no host apos a copia
+            }
+
             if ($ext -eq '.msu') {
-                $p = Start-Process -FilePath 'wusa.exe' -ArgumentList "`"$pkgPath`" /quiet /norestart" -Wait -PassThru
+                # Lista de argumentos como array: o Start-Process cuida da citacao,
+                # evitando erros de sintaxe (ex: exit code 123 / ERROR_INVALID_NAME)
+                $p = Start-Process -FilePath 'wusa.exe' -ArgumentList @($pkgPath, '/quiet', '/norestart') -Wait -PassThru
             } else {
-                $p = Start-Process -FilePath 'dism.exe' -ArgumentList "/Online /Add-Package /PackagePath:`"$pkgPath`" /NoRestart /Quiet" -Wait -PassThru
+                $p = Start-Process -FilePath 'dism.exe' -ArgumentList @('/Online', '/Add-Package', "/PackagePath:$pkgPath", '/NoRestart', '/Quiet') -Wait -PassThru
             }
             return $p.ExitCode
         } -ArgumentList $remotePath, $Extension
@@ -240,6 +249,7 @@ $script:InstallWorker = {
             ExitCode      = $exitCode
             Success       = $success
             RebootPending = $rebootNeeded
+            RemotePath    = $remotePath
             Status        = if ($success) { 'Sucesso' } else { 'Erro' }
             Detail        = $null   # preenchido pelo chamador via Get-FriendlyExitDetail
         }
@@ -620,6 +630,7 @@ $timer.Add_Tick({
                 elseif ($job.Kind -eq 'Install') {
                     $detail = Get-FriendlyExitDetail -ExitCode $result.ExitCode
                     if ($result.Status -eq 'Erro' -and $result.Detail) { $detail = $result.Detail }
+                    if ($result.Status -eq 'Erro' -and $result.RemotePath) { $detail = "$detail (caminho: $($result.RemotePath))" }
                     Set-RowValues -HostName $result.HostName -Values @{
                         Status   = $result.Status
                         ExitCode = $result.ExitCode
