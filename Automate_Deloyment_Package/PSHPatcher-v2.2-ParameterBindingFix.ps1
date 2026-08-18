@@ -463,7 +463,7 @@ $script:InstallWorker = {
 # ===========================================================================
 
 $form                  = New-Object System.Windows.Forms.Form
-$form.Text             = 'PSHPatcher v2 - Windows CU Remote Installer'
+$form.Text             = 'PSHPatcher v2.2 - Windows CU Remote Installer'
 $form.Size             = New-Object System.Drawing.Size(1180, 760)
 $form.StartPosition    = 'CenterScreen'
 $form.MinimumSize      = New-Object System.Drawing.Size(900, 550)
@@ -652,7 +652,28 @@ function Set-RowValues {
 
 # Dispara N workers em paralelo usando um RunspacePool, guardando handles em $script:Jobs
 function Start-ParallelWork {
-    param([scriptblock]$WorkerBlock, [string[]]$Hosts, [hashtable]$CommonArgs, [string]$JobKind)
+    param(
+        [scriptblock]$WorkerBlock,
+        [string[]]$Hosts,
+        [System.Collections.IDictionary]$CommonArgs,
+        [string]$JobKind
+    )
+
+    # IMPORTANTE:
+    # CommonArgs chega como [ordered] (OrderedDictionary). Nao converter para
+    # [hashtable], pois a conversao perde a ordem e os argumentos sao enviados
+    # ao worker por POSICAO via AddArgument().
+    #
+    # Exemplo do bug anterior:
+    #   Worker espera: Credential, LocalFilePath, FileName, Extension, SyncHash
+    #   Hashtable pode entregar: FileName, SyncHash, Credential, ...
+    #   Resultado: LocalFilePath recebe um valor errado e Test-Path falha.
+    #
+    # Mantendo IDictionary, o OrderedDictionary original preserva a sequencia.
+
+    if (-not $CommonArgs) {
+        throw 'Start-ParallelWork recebeu CommonArgs vazio.'
+    }
 
     $maxThreads = [int]$numMaxThreads.Value
     $script:RunspacePool = [runspacefactory]::CreateRunspacePool(1, $maxThreads)
@@ -662,12 +683,22 @@ function Start-ParallelWork {
         $ps = [powershell]::Create()
         $ps.RunspacePool = $script:RunspacePool
         [void]$ps.AddScript($WorkerBlock)
+
+        # Primeiro argumento de todos os workers: HostName
         [void]$ps.AddArgument($h)
-        foreach ($argVal in $CommonArgs.Values) { [void]$ps.AddArgument($argVal) }
+
+        # Os demais argumentos seguem EXATAMENTE a ordem declarada no [ordered]
+        # de cada chamada (Preflight e Install).
+        foreach ($entry in $CommonArgs.GetEnumerator()) {
+            [void]$ps.AddArgument($entry.Value)
+        }
 
         $handle = $ps.BeginInvoke()
         $script:Jobs.Add([PSCustomObject]@{
-            HostName = $h; PS = $ps; Handle = $handle; Kind = $JobKind
+            HostName = $h
+            PS       = $ps
+            Handle   = $handle
+            Kind     = $JobKind
         })
     }
 }
