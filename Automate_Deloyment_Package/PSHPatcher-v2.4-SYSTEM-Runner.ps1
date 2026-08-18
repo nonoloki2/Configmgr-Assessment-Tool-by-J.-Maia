@@ -370,51 +370,155 @@ $script:InstallWorker = {
         }
 
         # -------------------------------------------------------------------
-        # Instalacao v2.3 - EXECUCAO LOCAL COMO NT AUTHORITY\SYSTEM
+        # Instalacao v2.4 - SYSTEM RUNNER + ARQUIVO DE RESULTADO
         #
-        # O WinRM continua sendo usado apenas como canal de controle.
-        # O WUSA/DISM NAO e iniciado dentro da sessao WinRM. Em vez disso,
-        # criamos uma Scheduled Task temporaria no endpoint, executada por
-        # SYSTEM + Highest Privileges, aguardamos o termino e lemos o exit code.
+        # Nao dependemos mais do estado Running/Ready da Scheduled Task.
+        # A task executa um runner PowerShell local como SYSTEM.
+        # O runner:
+        #   - inicia WUSA/DISM;
+        #   - aguarda o processo terminar;
+        #   - grava o exit code em um arquivo .result;
+        #   - grava log detalhado em um arquivo .log.
+        #
+        # A GUI apenas aguarda o arquivo de resultado. Isso elimina o
+        # travamento observado na v2.3 com tasks em Ready.
         # -------------------------------------------------------------------
-        Set-Stage 'Instalando SYSTEM' "Criando tarefa local como SYSTEM (copia: $copyMethod)..."
+        Set-Stage 'Preparando SYSTEM' "Preparando runner local como SYSTEM (copia: $copyMethod)..."
 
         $systemResult = Invoke-Command -Session $session -ScriptBlock {
             param($pkgPath, $ext)
 
-            if (-not (Test-Path -LiteralPath $pkgPath -PathType Leaf)) {
-                return [PSCustomObject]@{
-                    ExitCode = -2
-                    Detail   = "Pacote nao encontrado no endpoint: $pkgPath"
-                    TaskName = $null
-                }
-            }
-
-            $taskName = "PSHPatcher_SYSTEM_$([Guid]::NewGuid().ToString('N'))"
+            $baseDir = 'C:\Temp\PSHPatcher'
+            $jobId = [Guid]::NewGuid().ToString('N')
+            $taskName = "PSHPatcher_SYSTEM_$jobId"
             $taskPath = '\PSHPatcher\'
-            $registered = $false
+            $runnerPath = Join-Path $baseDir "PSHPatcherRunner_$jobId.ps1"
+            $resultPath = Join-Path $baseDir "PSHPatcherRunner_$jobId.result"
+            $logPath = Join-Path $baseDir "PSHPatcherRunner_$jobId.log"
 
             try {
-                # Garante que o modulo ScheduledTasks esta disponivel.
+                if (-not (Test-Path -LiteralPath $pkgPath -PathType Leaf)) {
+                    return [PSCustomObject]@{
+                        ExitCode  = -2
+                        Detail    = "Pacote nao encontrado no endpoint: $pkgPath"
+                        TaskName  = $null
+                        LogPath   = $null
+                        ResultPath= $null
+                    }
+                }
+
                 Import-Module ScheduledTasks -ErrorAction Stop
 
-                if ($ext -eq '.msu') {
-                    $exe  = "$env:SystemRoot\System32\wusa.exe"
-                    $args = "`"$pkgPath`" /quiet /norestart"
-                }
-                elseif ($ext -eq '.cab') {
-                    $exe  = "$env:SystemRoot\System32\dism.exe"
-                    $args = "/Online /Add-Package /PackagePath:`"$pkgPath`" /NoRestart /Quiet"
-                }
-                else {
-                    throw "Extensao de pacote nao suportada: $ext"
-                }
+                # Remove tasks orfas de execucoes anteriores.
+                Get-ScheduledTask -TaskPath $taskPath -ErrorAction SilentlyContinue |
+                    Where-Object { $_.TaskName -like 'PSHPatcher_SYSTEM_*' } |
+                    ForEach-Object {
+                        try {
+                            Stop-ScheduledTask -TaskName $_.TaskName -TaskPath $taskPath -ErrorAction SilentlyContinue
+                        } catch {}
+                        try {
+                            Unregister-ScheduledTask -TaskName $_.TaskName -TaskPath $taskPath -Confirm:$false -ErrorAction SilentlyContinue
+                        } catch {}
+                    }
 
-                # Action executa o instalador diretamente; assim LastTaskResult
-                # recebe o exit code real do WUSA/DISM.
+                # Remove runners/resultados antigos com mais de 24 horas.
+                Get-ChildItem -LiteralPath $baseDir -File -ErrorAction SilentlyContinue |
+                    Where-Object {
+                        $_.Name -like 'PSHPatcherRunner_*' -and
+                        $_.LastWriteTime -lt (Get-Date).AddHours(-24)
+                    } |
+                    Remove-Item -Force -ErrorAction SilentlyContinue
+
+                $runner = @'
+param(
+    [Parameter(Mandatory=$true)][string]$PackagePath,
+    [Parameter(Mandatory=$true)][string]$Extension,
+    [Parameter(Mandatory=$true)][string]$ResultPath,
+    [Parameter(Mandatory=$true)][string]$LogPath
+)
+
+$ErrorActionPreference = 'Stop'
+
+function Write-RunnerLog {
+    param([string]$Message)
+    $line = "{0:yyyy-MM-dd HH:mm:ss.fff} | {1}" -f (Get-Date), $Message
+    Add-Content -LiteralPath $LogPath -Value $line -Encoding UTF8
+}
+
+try {
+    Write-RunnerLog "Runner iniciado."
+    Write-RunnerLog "Identity: $([System.Security.Principal.WindowsIdentity]::GetCurrent().Name)"
+    Write-RunnerLog "Package: $PackagePath"
+    Write-RunnerLog "Extension: $Extension"
+
+    if (-not (Test-Path -LiteralPath $PackagePath -PathType Leaf)) {
+        throw "Pacote nao encontrado: $PackagePath"
+    }
+
+    if ($Extension -eq '.msu') {
+        $exe = "$env:SystemRoot\System32\wusa.exe"
+        $arguments = @(
+            "`"$PackagePath`""
+            '/quiet'
+            '/norestart'
+        )
+    }
+    elseif ($Extension -eq '.cab') {
+        $exe = "$env:SystemRoot\System32\dism.exe"
+        $arguments = @(
+            '/Online'
+            '/Add-Package'
+            "/PackagePath:`"$PackagePath`""
+            '/NoRestart'
+            '/Quiet'
+        )
+    }
+    else {
+        throw "Extensao nao suportada: $Extension"
+    }
+
+    Write-RunnerLog "Executando: $exe $($arguments -join ' ')"
+
+    $proc = Start-Process `
+        -FilePath $exe `
+        -ArgumentList $arguments `
+        -Wait `
+        -PassThru `
+        -WindowStyle Hidden `
+        -ErrorAction Stop
+
+    $exitCode = [int64]$proc.ExitCode
+    Write-RunnerLog "Processo terminou. ExitCode=$exitCode"
+
+    Set-Content -LiteralPath $ResultPath -Value $exitCode -Encoding ASCII -Force
+}
+catch {
+    Write-RunnerLog "ERRO: $($_.Exception.Message)"
+    Set-Content -LiteralPath $ResultPath -Value '-9001' -Encoding ASCII -Force
+    exit 1
+}
+'@
+
+                Set-Content -LiteralPath $runnerPath -Value $runner -Encoding UTF8 -Force
+
+                $psExe = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+
+                # Os argumentos sao passados ao runner; aspas sao montadas
+                # explicitamente porque ScheduledTaskAction recebe uma string.
+                $taskArgs = @(
+                    '-NoProfile'
+                    '-NonInteractive'
+                    '-ExecutionPolicy Bypass'
+                    "-File `"$runnerPath`""
+                    "-PackagePath `"$pkgPath`""
+                    "-Extension `"$ext`""
+                    "-ResultPath `"$resultPath`""
+                    "-LogPath `"$logPath`""
+                ) -join ' '
+
                 $action = New-ScheduledTaskAction `
-                    -Execute $exe `
-                    -Argument $args
+                    -Execute $psExe `
+                    -Argument $taskArgs
 
                 $principal = New-ScheduledTaskPrincipal `
                     -UserId 'SYSTEM' `
@@ -424,6 +528,7 @@ $script:InstallWorker = {
                 $settings = New-ScheduledTaskSettingsSet `
                     -AllowStartIfOnBatteries `
                     -DontStopIfGoingOnBatteries `
+                    -StartWhenAvailable `
                     -ExecutionTimeLimit (New-TimeSpan -Hours 3) `
                     -MultipleInstances IgnoreNew
 
@@ -436,72 +541,89 @@ $script:InstallWorker = {
                     -Force `
                     -ErrorAction Stop | Out-Null
 
-                $registered = $true
+                Start-ScheduledTask `
+                    -TaskName $taskName `
+                    -TaskPath $taskPath `
+                    -ErrorAction Stop
 
-                # Marca o instante de inicio para evitar ler resultado antigo.
-                $startedAt = Get-Date
-                Start-ScheduledTask -TaskName $taskName -TaskPath $taskPath -ErrorAction Stop
+                # Confirma que a task recebeu uma execucao.
+                Start-Sleep -Seconds 2
 
-                # Aguarda a task realmente entrar em execucao (ate 30 s).
-                $enteredRunning = $false
-                $waitStart = Get-Date
-                do {
-                    Start-Sleep -Milliseconds 500
-                    $task = Get-ScheduledTask -TaskName $taskName -TaskPath $taskPath -ErrorAction Stop
-                    if ($task.State -eq 'Running') {
-                        $enteredRunning = $true
-                        break
-                    }
-                } while (((Get-Date) - $waitStart).TotalSeconds -lt 30)
-
-                # Aguarda termino. CU pode levar bastante tempo.
+                # Polling pelo arquivo de resultado produzido pelo runner.
                 $deadline = (Get-Date).AddHours(3)
-                do {
-                    Start-Sleep -Seconds 2
-                    $task = Get-ScheduledTask -TaskName $taskName -TaskPath $taskPath -ErrorAction Stop
-                    $info = Get-ScheduledTaskInfo -TaskName $taskName -TaskPath $taskPath -ErrorAction Stop
+                $lastState = $null
 
-                    # Terminou quando:
-                    # - nao esta Running; e
-                    # - existe uma execucao posterior ao Start-ScheduledTask.
-                    $hasFreshRun = ($info.LastRunTime -ge $startedAt.AddSeconds(-2))
-                    if ($task.State -ne 'Running' -and $hasFreshRun) {
-                        break
-                    }
-
+                while (-not (Test-Path -LiteralPath $resultPath -PathType Leaf)) {
                     if ((Get-Date) -ge $deadline) {
-                        throw 'Timeout de 3 horas aguardando a instalacao SYSTEM.'
-                    }
-                } while ($true)
+                        $taskState = $null
+                        try {
+                            $taskState = (Get-ScheduledTask -TaskName $taskName -TaskPath $taskPath -ErrorAction Stop).State
+                        } catch {}
 
-                # LastTaskResult e UInt32 em alguns hosts. Converter preservando
-                # os codigos positivos de WUSA/DISM usados pelo dashboard.
-                $rawResult = [uint32]$info.LastTaskResult
-                $exitCode = [int64]$rawResult
+                        $tail = ''
+                        if (Test-Path -LiteralPath $logPath) {
+                            $tail = (Get-Content -LiteralPath $logPath -Tail 10 -ErrorAction SilentlyContinue) -join ' | '
+                        }
+
+                        throw "Timeout aguardando runner SYSTEM. TaskState=$taskState. Log=$tail"
+                    }
+
+                    Start-Sleep -Seconds 2
+                }
+
+                $raw = (Get-Content -LiteralPath $resultPath -Raw -ErrorAction Stop).Trim()
+
+                [int64]$exitCode = 0
+                if (-not [int64]::TryParse($raw, [ref]$exitCode)) {
+                    throw "Resultado invalido gravado pelo runner: '$raw'"
+                }
+
+                $logTail = ''
+                if (Test-Path -LiteralPath $logPath) {
+                    $logTail = (Get-Content -LiteralPath $logPath -Tail 8 -ErrorAction SilentlyContinue) -join ' | '
+                }
 
                 return [PSCustomObject]@{
-                    ExitCode = $exitCode
-                    Detail   = "Executado como NT AUTHORITY\SYSTEM. Task=$taskPath$taskName"
-                    TaskName = "$taskPath$taskName"
+                    ExitCode   = $exitCode
+                    Detail     = "Executado como SYSTEM via runner local. $logTail"
+                    TaskName   = "$taskPath$taskName"
+                    LogPath    = $logPath
+                    ResultPath = $resultPath
                 }
             }
             catch {
+                $err = $_.Exception.Message
+
+                $logTail = ''
+                if (Test-Path -LiteralPath $logPath) {
+                    $logTail = (Get-Content -LiteralPath $logPath -Tail 10 -ErrorAction SilentlyContinue) -join ' | '
+                }
+
                 return [PSCustomObject]@{
-                    ExitCode = -3
-                    Detail   = "Falha na execucao SYSTEM: $($_.Exception.Message)"
-                    TaskName = "$taskPath$taskName"
+                    ExitCode   = -3
+                    Detail     = "Falha SYSTEM runner: $err | Log: $logTail"
+                    TaskName   = "$taskPath$taskName"
+                    LogPath    = $logPath
+                    ResultPath = $resultPath
                 }
             }
             finally {
-                if ($registered) {
-                    # A task e descartavel; o pacote so sera apagado pelo caller
-                    # quando o resultado for considerado sucesso.
+                # A task e sempre descartavel.
+                try {
+                    Stop-ScheduledTask -TaskName $taskName -TaskPath $taskPath -ErrorAction SilentlyContinue
+                } catch {}
+
+                try {
                     Unregister-ScheduledTask `
                         -TaskName $taskName `
                         -TaskPath $taskPath `
                         -Confirm:$false `
                         -ErrorAction SilentlyContinue
-                }
+                } catch {}
+
+                # O runner pode ser removido; log e result ficam em erro para
+                # diagnostico e sao limpos automaticamente apos 24 horas.
+                Remove-Item -LiteralPath $runnerPath -Force -ErrorAction SilentlyContinue
             }
         } -ArgumentList $remotePath, $Extension -ErrorAction Stop
 
@@ -579,7 +701,7 @@ $script:InstallWorker = {
 # ===========================================================================
 
 $form                  = New-Object System.Windows.Forms.Form
-$form.Text             = 'PSHPatcher v2.3 SYSTEM - Windows CU Remote Installer'
+$form.Text             = 'PSHPatcher v2.4 SYSTEM Runner - Windows CU Remote Installer'
 $form.Size             = New-Object System.Drawing.Size(1180, 760)
 $form.StartPosition    = 'CenterScreen'
 $form.MinimumSize      = New-Object System.Drawing.Size(900, 550)
