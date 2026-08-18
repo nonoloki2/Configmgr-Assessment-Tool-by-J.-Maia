@@ -142,55 +142,179 @@ $script:PreflightWorker = {
 
     function Set-Stage($status, $detail) {
         $SyncHash[$HostName] = @{
-            Status = $status; Detail = $detail; Stage = $status
+            Status = $status
+            Detail = $detail
+            Stage  = $status
         }
     }
 
-    Set-Stage 'Verificando' 'Testando conectividade (ping)...'
-    $online = Test-Connection -ComputerName $HostName -Count 1 -Quiet -ErrorAction SilentlyContinue
-    if (-not $online) {
-        Set-Stage 'Erro' 'Host offline (sem resposta de ping)'
-        return [PSCustomObject]@{ HostName=$HostName; Online=$false; WinRM=$false; Status='Erro'; Detail='Host offline'; RebootPending=$null; FreeDiskGB=$null; OSCaption=$null; BuildNumber=$null; HasKB=$null }
-    }
-
-    Set-Stage 'Verificando' 'Testando WinRM...'
-    $wsmanOk = $false
-    $hasCred = ($Credential -is [System.Management.Automation.PSCredential])
     try {
-        $params = @{ ComputerName = $HostName; ErrorAction = 'Stop' }
-        if ($hasCred) { $params.Credential = $Credential }
-        Test-WSMan @params | Out-Null
-        $wsmanOk = $true
-    } catch { $wsmanOk = $false }
+        Set-Stage 'Verificando' 'Testando conectividade...'
 
-    if (-not $wsmanOk) {
-        Set-Stage 'Erro' 'WinRM indisponivel neste host'
-        return [PSCustomObject]@{ HostName=$HostName; Online=$true; WinRM=$false; Status='Erro'; Detail='WinRM indisponivel'; RebootPending=$null; FreeDiskGB=$null; OSCaption=$null; BuildNumber=$null; HasKB=$null }
+        $online = Test-Connection -ComputerName $HostName -Count 1 -Quiet -ErrorAction SilentlyContinue
+        if (-not $online) {
+            return [PSCustomObject]@{
+                HostName       = $HostName
+                IP             = ''
+                Online         = 'Nao'
+                WinRM          = 'Nao'
+                WindowsBuild   = ''
+                DiskFree       = ''
+                RebootPending  = ''
+                KBInstalled    = ''
+                Compatible     = ''
+                Status         = 'Offline'
+                ExitCode       = ''
+                Detail         = 'Host nao respondeu ao ping.'
+            }
+        }
+
+        $ip = ''
+        try {
+            $ip = [System.Net.Dns]::GetHostAddresses($HostName) |
+                Where-Object { $_.AddressFamily -eq 'InterNetwork' } |
+                Select-Object -First 1 -ExpandProperty IPAddressToString
+        } catch {}
+
+        Set-Stage 'Verificando' 'Testando WinRM...'
+
+        $sParams = @{
+            ComputerName = $HostName
+            ErrorAction  = 'Stop'
+        }
+        if ($Credential -is [System.Management.Automation.PSCredential]) {
+            $sParams.Credential = $Credential
+        }
+
+        $session = $null
+        try {
+            $session = New-PSSession @sParams
+        }
+        catch {
+            return [PSCustomObject]@{
+                HostName       = $HostName
+                IP             = $ip
+                Online         = 'Sim'
+                WinRM          = 'Nao'
+                WindowsBuild   = ''
+                DiskFree       = ''
+                RebootPending  = ''
+                KBInstalled    = ''
+                Compatible     = ''
+                Status         = 'Erro'
+                ExitCode       = -1
+                Detail         = "WinRM indisponivel: $($_.Exception.Message)"
+            }
+        }
+
+        try {
+            Set-Stage 'Inventariando' 'Coletando Windows, build, disco, reboot e KB...'
+
+            $inv = Invoke-Command -Session $session -ScriptBlock {
+                param($kb)
+
+                # Build completa = CurrentBuild + UBR.
+                $cv = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion' -ErrorAction Stop
+                $buildBase = [string]$cv.CurrentBuild
+                $ubr = [string]$cv.UBR
+                $fullBuild = if ($ubr) { "$buildBase.$ubr" } else { $buildBase }
+
+                $displayVersion = [string]$cv.DisplayVersion
+                $productName = [string]$cv.ProductName
+
+                # Em alguns upgrades o ProductName pode continuar dizendo Windows 10.
+                # ProductType 1 = workstation; build >= 22000 = Windows 11.
+                try {
+                    $os = Get-CimInstance Win32_OperatingSystem -ErrorAction Stop
+                    $caption = [string]$os.Caption
+                } catch {
+                    $caption = $productName
+                }
+
+                $windowsText = $caption
+                if ($displayVersion) { $windowsText += " $displayVersion" }
+                if ($fullBuild) { $windowsText += " | $fullBuild" }
+
+                $diskText = ''
+                try {
+                    $disk = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='C:'" -ErrorAction Stop
+                    if ($disk -and $disk.Size -gt 0) {
+                        $freeGB = [math]::Round($disk.FreeSpace / 1GB, 1)
+                        $totalGB = [math]::Round($disk.Size / 1GB, 1)
+                        $pct = [math]::Round(($disk.FreeSpace / $disk.Size) * 100, 1)
+                        $diskText = "$freeGB GB ($pct%)"
+                    }
+                } catch {}
+
+                $reboot = $false
+                try {
+                    if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') { $reboot = $true }
+                    if (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired') { $reboot = $true }
+                    $pfro = Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager' -Name PendingFileRenameOperations -ErrorAction SilentlyContinue
+                    if ($pfro.PendingFileRenameOperations) { $reboot = $true }
+                } catch {}
+
+                $kbInstalled = $false
+                if ($kb) {
+                    try {
+                        $qfe = Get-CimInstance Win32_QuickFixEngineering -ErrorAction Stop |
+                            Where-Object { $_.HotFixID -eq $kb } |
+                            Select-Object -First 1
+                        if ($qfe) { $kbInstalled = $true }
+                    } catch {}
+
+                    if (-not $kbInstalled) {
+                        try {
+                            $hf = Get-HotFix -Id $kb -ErrorAction Stop
+                            if ($hf) { $kbInstalled = $true }
+                        } catch {}
+                    }
+                }
+
+                [PSCustomObject]@{
+                    WindowsBuild  = $windowsText
+                    DiskFree      = $diskText
+                    RebootPending = $(if ($reboot) { 'Sim' } else { 'Nao' })
+                    KBInstalled   = $(if ($kbInstalled) { 'Sim' } else { 'Nao' })
+                }
+            } -ArgumentList $KB -ErrorAction Stop
+
+            return [PSCustomObject]@{
+                HostName       = $HostName
+                IP             = $ip
+                Online         = 'Sim'
+                WinRM          = 'Sim'
+                WindowsBuild   = $inv.WindowsBuild
+                DiskFree       = $inv.DiskFree
+                RebootPending  = $inv.RebootPending
+                KBInstalled    = $inv.KBInstalled
+                Compatible     = 'Sim'
+                Status         = 'Pronto'
+                ExitCode       = ''
+                Detail         = 'Preflight concluido.'
+            }
+        }
+        finally {
+            if ($session) {
+                Remove-PSSession -Session $session -ErrorAction SilentlyContinue
+            }
+        }
     }
-
-    Set-Stage 'Verificando' 'Coletando inventario (build, disco, reboot pendente)...'
-    try {
-        $icParams = @{ ComputerName = $HostName; ScriptBlock = $InventoryBlock; ArgumentList = @($KB); ErrorAction = 'Stop' }
-        if ($hasCred) { $icParams.Credential = $Credential }
-        $inv = Invoke-Command @icParams
-    } catch {
-        Set-Stage 'Erro' "Falha ao coletar inventario: $($_.Exception.Message)"
-        return [PSCustomObject]@{ HostName=$HostName; Online=$true; WinRM=$true; Status='Erro'; Detail=$_.Exception.Message; RebootPending=$null; FreeDiskGB=$null; OSCaption=$null; BuildNumber=$null; HasKB=$null }
-    }
-
-    Set-Stage 'Verificado' 'Inventario coletado'
-    [PSCustomObject]@{
-        HostName      = $HostName
-        Online        = $true
-        WinRM         = $true
-        Status        = 'Verificado'
-        Detail        = 'Pronto para instalacao'
-        RebootPending = $inv.RebootPending
-        FreeDiskGB    = $inv.FreeDiskGB
-        OSCaption     = $inv.OSCaption
-        OSArch        = $inv.OSArch
-        BuildNumber   = $inv.BuildNumber
-        HasKB         = $inv.HasKB
+    catch {
+        return [PSCustomObject]@{
+            HostName       = $HostName
+            IP             = ''
+            Online         = ''
+            WinRM          = ''
+            WindowsBuild   = ''
+            DiskFree       = ''
+            RebootPending  = ''
+            KBInstalled    = ''
+            Compatible     = ''
+            Status         = 'Erro'
+            ExitCode       = -1
+            Detail         = $_.Exception.Message
+        }
     }
 }
 
@@ -761,7 +885,7 @@ catch {
 # ===========================================================================
 
 $form                  = New-Object System.Windows.Forms.Form
-$form.Text             = 'PSHPatcher v2.5 Verified SYSTEM - Windows CU Remote Installer'
+$form.Text             = 'PSHPatcher v2.6 Full Preflight - Windows CU Remote Installer'
 $form.Size             = New-Object System.Drawing.Size(1180, 760)
 $form.StartPosition    = 'CenterScreen'
 $form.MinimumSize      = New-Object System.Drawing.Size(900, 550)
@@ -1053,6 +1177,48 @@ $btnCheckHosts.Add_Click({
     $timer.Start()
 })
 
+
+function Invoke-PreflightForInstall {
+    param([string[]]$Hosts)
+
+    $cred = $script:Credential
+    $kb = $script:UpdateInfo.KB
+
+    foreach ($hostName in $Hosts) {
+        $row = $null
+        foreach ($r in $grid.Rows) {
+            if ([string]$r.Cells['Host'].Value -eq $hostName) {
+                $row = $r
+                break
+            }
+        }
+
+        if ($row) {
+            $row.Cells['Status'].Value = 'Verificando'
+            $row.Cells['Detalhe'].Value = 'Preflight automatico antes da instalacao...'
+        }
+
+        $sync = [hashtable]::Synchronized(@{})
+        $result = & $script:PreflightWorker $hostName $cred $kb $script:InventoryBlock $sync
+
+        if ($row -and $result) {
+            $row.Cells['IP'].Value           = $result.IP
+            $row.Cells['Online'].Value       = $result.Online
+            $row.Cells['WinRM'].Value        = $result.WinRM
+            $row.Cells['WindowsBuild'].Value = $result.WindowsBuild
+            $row.Cells['DiskFree'].Value     = $result.DiskFree
+            $row.Cells['RebootPending'].Value= $result.RebootPending
+            $row.Cells['KBInstalled'].Value  = $result.KBInstalled
+            $row.Cells['Compatible'].Value   = $result.Compatible
+            $row.Cells['Status'].Value       = $result.Status
+            $row.Cells['ExitCode'].Value     = $result.ExitCode
+            $row.Cells['Detalhe'].Value      = $result.Detail
+        }
+
+        [System.Windows.Forms.Application]::DoEvents()
+    }
+}
+
 $btnInstall.Add_Click({
     if (-not $script:UpdateFilePath) {
         [System.Windows.Forms.MessageBox]::Show('Selecione o arquivo de update (.msu/.cab) primeiro.', 'PSHPatcher') | Out-Null
@@ -1068,6 +1234,10 @@ $btnInstall.Add_Click({
         ) | Out-Null
         return
     }
+
+    # v2.6: o Install CU sempre atualiza inventario/preflight primeiro.
+    $hostsForPreflight = Get-HostsFromUI
+    Invoke-PreflightForInstall -Hosts $hostsForPreflight
     if ($grid.Rows.Count -eq 0) { Initialize-GridRows }
     if ($grid.Rows.Count -eq 0) {
         [System.Windows.Forms.MessageBox]::Show('Carregue a lista de hosts primeiro.', 'PSHPatcher') | Out-Null
