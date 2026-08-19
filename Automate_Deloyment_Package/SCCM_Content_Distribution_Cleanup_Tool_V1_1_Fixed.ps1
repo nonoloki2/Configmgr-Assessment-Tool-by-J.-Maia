@@ -448,7 +448,7 @@ function Invoke-ContentRemoval {
                         break
                     }
                 }
-                Write-UiLog "Falha em $dpName: $message" 'ERROR'
+                Write-UiLog "Falha em ${dpName}: $message" 'ERROR'
             }
         }
 
