@@ -344,6 +344,37 @@ function Refresh-DistributionSummary {
     }
 }
 
+
+function Set-CurrentContentFromRow {
+    param(
+        [Parameter(Mandatory)]
+        [System.Windows.Forms.DataGridViewRow]$Row
+    )
+
+    if ($null -eq $Row -or $Row.IsNewRow) {
+        return
+    }
+
+    if ($null -eq $Row.Tag) {
+        Write-UiLog 'A linha selecionada ainda nao possui o objeto SCCM associado.' 'WARN'
+        return
+    }
+
+    $script:CurrentObject = $Row.Tag
+    $script:CurrentObjectType = [string]$Row.Cells['Type'].Value
+    $script:CurrentObjectName = [string]$Row.Cells['Name'].Value
+    $script:CurrentPackageId = [string]$Row.Cells['PackageId'].Value
+
+    $script:lblSelected.Text =
+        "Selecionado: $($script:CurrentObjectType) | $($script:CurrentObjectName) | ID: $($script:CurrentPackageId)"
+
+    $script:chkPreserveDependencies.Enabled = ($script:CurrentObjectType -eq 'Application')
+
+    Write-UiLog "Conteudo selecionado: $($script:CurrentObjectType) | $($script:CurrentObjectName) | $($script:CurrentPackageId)" 'INFO'
+
+    Refresh-DistributionSummary
+}
+
 function Invoke-ContentRemoval {
     param(
         [switch]$Preview
@@ -473,7 +504,7 @@ function Invoke-ContentRemoval {
 # ============================================================
 $form = New-Object System.Windows.Forms.Form
 $script:form = $form
-$form.Text = 'SCCM Content Distribution Cleanup Tool - V1'
+$form.Text = 'SCCM Content Distribution Cleanup Tool - V1.2'
 $form.StartPosition = 'CenterScreen'
 $form.Size = New-Object System.Drawing.Size(1180, 820)
 $form.MinimumSize = New-Object System.Drawing.Size(1050, 720)
@@ -879,7 +910,11 @@ $btnSearch.Add_Click({
             }
         }
 
-        Set-StatusText "Pesquisa concluida. Resultados: $count." ([System.Drawing.Color]::DarkGreen)
+        if ($count -gt 0) {
+            $dgvResults.ClearSelection()
+        }
+
+        Set-StatusText "Pesquisa concluida. Resultados: $count. Clique em uma linha para selecionar o conteudo." ([System.Drawing.Color]::DarkGreen)
         Write-UiLog "Pesquisa concluida. Resultados: $count." 'OK'
     }
     catch {
@@ -897,26 +932,25 @@ $txtSearch.Add_KeyDown({
 
 $dgvResults.Add_SelectionChanged({
     try {
-        if ($dgvResults.SelectedRows.Count -eq 0) { return }
-
-        $row = $dgvResults.SelectedRows[0]
-        if (-not $row.Tag) { return }
-
-        $script:CurrentObject = $row.Tag
-        $script:CurrentObjectType = [string]$row.Cells['Type'].Value
-        $script:CurrentObjectName = [string]$row.Cells['Name'].Value
-        $script:CurrentPackageId = [string]$row.Cells['PackageId'].Value
-
-        $script:lblSelected.Text =
-            "Selecionado: $($script:CurrentObjectType) | $($script:CurrentObjectName) | ID: $($script:CurrentPackageId)"
-
-        $chkPreserveDependencies.Enabled = ($script:CurrentObjectType -eq 'Application')
-
-        Write-UiLog "Conteudo selecionado: $($script:CurrentObjectType) | $($script:CurrentObjectName) | $($script:CurrentPackageId)" 'INFO'
-        Refresh-DistributionSummary
+        if ($dgvResults.SelectedRows.Count -gt 0) {
+            Set-CurrentContentFromRow -Row $dgvResults.SelectedRows[0]
+        }
     }
     catch {
         Write-UiLog "Erro ao selecionar conteudo: $($_.Exception.Message)" 'ERROR'
+    }
+})
+
+$dgvResults.Add_CellClick({
+    try {
+        if ($_.RowIndex -ge 0) {
+            $row = $dgvResults.Rows[$_.RowIndex]
+            $row.Selected = $true
+            Set-CurrentContentFromRow -Row $row
+        }
+    }
+    catch {
+        Write-UiLog "Erro ao clicar no conteudo: $($_.Exception.Message)" 'ERROR'
     }
 })
 
@@ -1008,7 +1042,7 @@ $form.Add_FormClosing({
 # ============================================================
 # Inicializacao
 # ============================================================
-Write-UiLog 'SCCM Content Distribution Cleanup Tool V1 iniciado.' 'INFO'
+Write-UiLog 'SCCM Content Distribution Cleanup Tool V1.2 iniciado.' 'INFO'
 Write-UiLog 'A ferramenta nao exclui objetos do Configuration Manager; remove somente conteudo dos DPs.' 'INFO'
 
 if (-not [string]::IsNullOrWhiteSpace($SiteServer) -and -not [string]::IsNullOrWhiteSpace($SiteCode)) {
