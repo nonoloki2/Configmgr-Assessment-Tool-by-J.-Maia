@@ -20,7 +20,7 @@
     - Acesso ao SMS Provider / Site Server
 
 .NOTES
-    V1 - foco em seguranca:
+    V1.3 - foco em seguranca:
       - Nao exclui Application, Package ou Update Deployment Package do site.
       - Usa Remove-CMContentDistribution.
       - Preview usa -WhatIf.
@@ -403,6 +403,29 @@ function Invoke-ContentRemoval {
         return
     }
 
+    # Trava adicional para Applications:
+    # Remove-CMContentDistribution usa ApplicationName neste fluxo.
+    # Se houver mais de uma Application com exatamente o mesmo nome,
+    # a operacao e abortada para evitar atingir objeto ambiguo.
+    if ($script:CurrentObjectType -eq 'Application') {
+        $exactMatches = @(
+            Get-CMApplication -Name $script:CurrentObjectName -DisableWildcardHandling -ErrorAction Stop |
+            Where-Object { $_.LocalizedDisplayName -eq $script:CurrentObjectName }
+        )
+
+        if ($exactMatches.Count -ne 1) {
+            $msg = "A operacao foi bloqueada por seguranca. Foram encontradas $($exactMatches.Count) Applications com o nome exato '$($script:CurrentObjectName)'. Renomeie/identifique unicamente a Application antes de remover o conteudo."
+            Write-UiLog $msg 'ERROR'
+            [System.Windows.Forms.MessageBox]::Show(
+                $msg,
+                'Application ambigua',
+                'OK',
+                'Error'
+            ) | Out-Null
+            return
+        }
+    }
+
     if (-not $Preview) {
         $confirmed = Show-RemoveConfirmation `
             -ContentName $script:CurrentObjectName `
@@ -439,27 +462,71 @@ function Invoke-ContentRemoval {
             [System.Windows.Forms.Application]::DoEvents()
 
             try {
+                # IMPORTANTE:
+                # Cada tipo usa o parameter set oficial correspondente do
+                # Remove-CMContentDistribution. Nao misturamos -InputObject
+                # com parametros especificos de Application.
                 $params = @{
-                    InputObject            = $script:CurrentObject
                     DistributionPointName = $dpName
-                    ErrorAction            = 'Stop'
+                    ErrorAction           = 'Stop'
                 }
 
-                # Seguranca: por padrao, nao remover automaticamente o conteudo
-                # das Applications dependentes.
-                if ($script:CurrentObjectType -eq 'Application' -and $script:chkPreserveDependencies.Checked) {
-                    $params['DisableContentDependencyDetection'] = $true
+                switch ($script:CurrentObjectType) {
+                    'Application' {
+                        $params['ApplicationName'] = $script:CurrentObjectName
+
+                        if ($script:chkPreserveDependencies.Checked) {
+                            $params['DisableContentDependencyDetection'] = $true
+                        }
+                    }
+
+                    'Package' {
+                        if ([string]::IsNullOrWhiteSpace($script:CurrentPackageId)) {
+                            throw 'Package ID nao encontrado para o Package selecionado.'
+                        }
+                        $params['PackageId'] = $script:CurrentPackageId
+                    }
+
+                    'Software Update Deployment Package' {
+                        if ([string]::IsNullOrWhiteSpace($script:CurrentPackageId)) {
+                            throw 'Deployment Package ID nao encontrado para o Software Update Deployment Package selecionado.'
+                        }
+                        $params['DeploymentPackageId'] = $script:CurrentPackageId
+                    }
+
+                    default {
+                        throw "Tipo de conteudo nao suportado: $($script:CurrentObjectType)"
+                    }
                 }
 
                 if ($Preview) {
                     $params['WhatIf'] = $true
-                    Remove-CMContentDistribution @params
-                    $resultText = 'WhatIf OK'
-                    Write-UiLog "WHATIF: $($script:CurrentObjectName) -> $dpName" 'PREVIEW'
                 }
                 else {
                     $params['Force'] = $true
-                    Remove-CMContentDistribution @params
+                    $params['Confirm'] = $false
+                }
+
+                # Loga a identidade exata usada antes de chamar o cmdlet.
+                switch ($script:CurrentObjectType) {
+                    'Application' {
+                        Write-UiLog "Comando alvo: ApplicationName='$($script:CurrentObjectName)' | DP='$dpName' | PreserveDependencies=$($script:chkPreserveDependencies.Checked) | Preview=$([bool]$Preview)" $(if ($Preview) {'PREVIEW'} else {'INFO'})
+                    }
+                    'Package' {
+                        Write-UiLog "Comando alvo: PackageId='$($script:CurrentPackageId)' | DP='$dpName' | Preview=$([bool]$Preview)" $(if ($Preview) {'PREVIEW'} else {'INFO'})
+                    }
+                    'Software Update Deployment Package' {
+                        Write-UiLog "Comando alvo: DeploymentPackageId='$($script:CurrentPackageId)' | DP='$dpName' | Preview=$([bool]$Preview)" $(if ($Preview) {'PREVIEW'} else {'INFO'})
+                    }
+                }
+
+                Remove-CMContentDistribution @params
+
+                if ($Preview) {
+                    $resultText = 'WhatIf OK'
+                    Write-UiLog "WHATIF validado: $($script:CurrentObjectName) -> $dpName" 'PREVIEW'
+                }
+                else {
                     $resultText = 'Solicitado'
                     Write-UiLog "Remocao solicitada: $($script:CurrentObjectName) -> $dpName" 'OK'
                 }
@@ -504,7 +571,7 @@ function Invoke-ContentRemoval {
 # ============================================================
 $form = New-Object System.Windows.Forms.Form
 $script:form = $form
-$form.Text = 'SCCM Content Distribution Cleanup Tool - V1.2'
+$form.Text = 'SCCM Content Distribution Cleanup Tool - V1.3'
 $form.StartPosition = 'CenterScreen'
 $form.Size = New-Object System.Drawing.Size(1180, 820)
 $form.MinimumSize = New-Object System.Drawing.Size(1050, 720)
@@ -1042,7 +1109,7 @@ $form.Add_FormClosing({
 # ============================================================
 # Inicializacao
 # ============================================================
-Write-UiLog 'SCCM Content Distribution Cleanup Tool V1.2 iniciado.' 'INFO'
+Write-UiLog 'SCCM Content Distribution Cleanup Tool V1.3 iniciado.' 'INFO'
 Write-UiLog 'A ferramenta nao exclui objetos do Configuration Manager; remove somente conteudo dos DPs.' 'INFO'
 
 if (-not [string]::IsNullOrWhiteSpace($SiteServer) -and -not [string]::IsNullOrWhiteSpace($SiteCode)) {
