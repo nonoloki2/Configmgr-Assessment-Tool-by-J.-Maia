@@ -379,15 +379,17 @@ function Get-CMAppCreatorHelperScriptText {
     return @'
 param(
     [Parameter(Mandatory=$true)]
-    [ValidateSet('Ping','RunDetection','RunSourceScript','InventoryInstalledSoftware','FindExecutable')]
+    [ValidateSet('Ping','RunSourceScript','InventoryInstalledSoftware','FindExecutable','RunRegistryDetection','RunFileDetection')]
     [string]$Action,
 
-    [string]$DetectionScriptB64 = '',
     [string]$SourcePath = '',
     [string]$ScriptType = '',
     [string]$ScriptFile = '',
     [string]$NamePattern = '',
-    [string]$ExtraRoots = ''
+    [string]$ExtraRoots = '',
+    [string]$DisplayNamePattern = '',
+    [string]$MinVersion = '',
+    [string]$FilePath = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -395,6 +397,36 @@ $ErrorActionPreference = 'Stop'
 function Get-ExecutionIdentity {
     try { return [System.Security.Principal.WindowsIdentity]::GetCurrent().Name }
     catch { return (& whoami.exe 2>$null) }
+}
+
+function Get-UninstallPathsIncludingHKU {
+    <#
+        Monta a lista de caminhos de registro Uninstall a varrer: HKLM nativo,
+        HKLM WOW6432Node (apps 32-bit em SO 64-bit), HKCU do processo atual
+        (irrelevante quando rodando como SYSTEM, mas nao custa incluir) e,
+        principalmente, HKEY_USERS de cada hive de usuario carregado - onde
+        ficam instalacoes "so para o usuario atual" (ALLUSERS != 1 no MSI),
+        que sao invisiveis para o SYSTEM olhando so HKLM.
+    #>
+    $paths = @(
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    )
+
+    try {
+        if (-not (Get-PSDrive -Name HKU -ErrorAction SilentlyContinue)) {
+            New-PSDrive -Name HKU -PSProvider Registry -Root Registry::HKEY_USERS -ErrorAction SilentlyContinue | Out-Null
+        }
+        $userHives = Get-ChildItem -Path 'HKU:\' -ErrorAction SilentlyContinue |
+            Where-Object { $_.PSChildName -match '^S-1-5-21-[\d-]+$' }
+        foreach ($hive in $userHives) {
+            $paths += "HKU:\$($hive.PSChildName)\Software\Microsoft\Windows\CurrentVersion\Uninstall\*"
+        }
+    }
+    catch { }
+
+    return $paths
 }
 
 switch ($Action) {
@@ -407,20 +439,75 @@ switch ($Action) {
         } | ConvertTo-Json -Compress
     }
 
-    'RunDetection' {
-        if ([string]::IsNullOrWhiteSpace($DetectionScriptB64)) {
-            throw 'DetectionScriptB64 nao informado.'
+    'RunRegistryDetection' {
+        <#
+            Recebe so DisplayNamePattern e MinVersion (strings curtas) em vez
+            de um script inteiro em Base64 - o recurso Run Scripts do SCCM
+            tem limite de tamanho de parametro, e o script de deteccao
+            completo (com a varredura de HKU) estourava esse limite,
+            fazendo a deteccao "rodar em branco" sem erro nenhum.
+        #>
+        if ([string]::IsNullOrWhiteSpace($DisplayNamePattern)) { throw 'DisplayNamePattern nao informado.' }
+        if ([string]::IsNullOrWhiteSpace($MinVersion)) { throw 'MinVersion nao informado.' }
+
+        $minVer = $null
+        try { $minVer = [version]$MinVersion } catch { throw "MinVersion invalido: '$MinVersion'" }
+
+        $uninstallPaths = Get-UninstallPathsIncludingHKU
+
+        $candidatos = Get-ItemProperty -Path $uninstallPaths -ErrorAction SilentlyContinue |
+            Where-Object { $_.DisplayName -like "*$DisplayNamePattern*" -and $_.DisplayVersion }
+
+        $detected = $false
+        $detalhes = New-Object System.Collections.Generic.List[string]
+        foreach ($c in $candidatos) {
+            $detalhes.Add("DisplayName='$($c.DisplayName)' DisplayVersion='$($c.DisplayVersion)' Path=$($c.PSPath)")
+            try {
+                $iv = [version](($c.DisplayVersion) -replace '[^0-9.]', '')
+                if ($iv -ge $minVer) { $detected = $true }
+            }
+            catch { }
         }
 
-        $bytes = [Convert]::FromBase64String($DetectionScriptB64)
-        $text  = [Text.Encoding]::UTF8.GetString($bytes)
-        $sb    = [ScriptBlock]::Create($text)
+        [PSCustomObject]@{
+            ComputerName     = $env:COMPUTERNAME
+            Identity         = Get-ExecutionIdentity
+            Result           = if ($detected) { 'Instalado' } else { 'NaoInstalado' }
+            Correspondencias = $detalhes
+        } | ConvertTo-Json -Compress -Depth 3
+    }
 
-        $result = & $sb 2>&1 | Out-String
+    'RunFileDetection' {
+        if ([string]::IsNullOrWhiteSpace($FilePath)) { throw 'FilePath nao informado.' }
+
+        $existe = Test-Path -LiteralPath $FilePath
+        $versaoArquivo = $null
+        $detected = $false
+
+        if ($existe) {
+            if ([string]::IsNullOrWhiteSpace($MinVersion)) {
+                $detected = $true
+            }
+            else {
+                try {
+                    $versaoArquivo = (Get-Item -LiteralPath $FilePath).VersionInfo.FileVersion
+                    $fv = [version](($versaoArquivo) -replace '[^0-9.]', '')
+                    $minVer = [version]$MinVersion
+                    if ($fv -ge $minVer) { $detected = $true }
+                }
+                catch {
+                    # Sem info de versao legivel no arquivo: considera instalado so pela existencia.
+                    $detected = $true
+                }
+            }
+        }
+
         [PSCustomObject]@{
             ComputerName = $env:COMPUTERNAME
             Identity     = Get-ExecutionIdentity
-            Result       = $result.Trim()
+            Existe       = $existe
+            FileVersion  = $versaoArquivo
+            Result       = if ($detected) { 'Instalado' } else { 'NaoInstalado' }
         } | ConvertTo-Json -Compress
     }
 
@@ -533,7 +620,7 @@ switch ($Action) {
 
 function Ensure-CMAppCreatorHelperScript {
     param(
-        [string]$ScriptName = 'SCCM-AppCreator-SystemHelper-v2'
+        [string]$ScriptName = 'SCCM-AppCreator-SystemHelper-v3'
     )
 
     try {
@@ -625,12 +712,14 @@ function Wait-CMScriptResult {
 function Invoke-CMSystemAction {
     param(
         [Parameter(Mandatory)][string]$ComputerName,
-        [Parameter(Mandatory)][ValidateSet('Ping','RunDetection','RunSourceScript','InventoryInstalledSoftware','FindExecutable')][string]$Action,
-        [string]$DetectionScriptText,
+        [Parameter(Mandatory)][ValidateSet('Ping','RunSourceScript','InventoryInstalledSoftware','FindExecutable','RunRegistryDetection','RunFileDetection')][string]$Action,
         [string]$SourcePath,
         [PSCustomObject]$ScriptInfo,
         [string]$NamePattern,
         [string]$ExtraRoots,
+        [string]$DisplayNamePattern,
+        [string]$MinVersion,
+        [string]$FilePath,
         [int]$TimeoutSeconds = 90
     )
 
@@ -653,11 +742,7 @@ function Invoke-CMSystemAction {
 
     $params = @{ Action = $Action }
 
-    if ($Action -eq 'RunDetection') {
-        if ([string]::IsNullOrWhiteSpace($DetectionScriptText)) { throw 'Script de deteccao vazio.' }
-        $params.DetectionScriptB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($DetectionScriptText))
-    }
-    elseif ($Action -eq 'RunSourceScript') {
+    if ($Action -eq 'RunSourceScript') {
         if (-not $ScriptInfo) { throw 'Informacoes do script de install/uninstall nao fornecidas.' }
         if ([string]::IsNullOrWhiteSpace($SourcePath)) { throw 'Pasta de origem nao informada.' }
         $params.SourcePath = $SourcePath
@@ -668,6 +753,17 @@ function Invoke-CMSystemAction {
         if ([string]::IsNullOrWhiteSpace($NamePattern)) { throw 'Padrao de nome de arquivo nao informado.' }
         $params.NamePattern = $NamePattern
         if (-not [string]::IsNullOrWhiteSpace($ExtraRoots)) { $params.ExtraRoots = $ExtraRoots }
+    }
+    elseif ($Action -eq 'RunRegistryDetection') {
+        if ([string]::IsNullOrWhiteSpace($DisplayNamePattern)) { throw 'Padrao de DisplayName nao informado.' }
+        if ([string]::IsNullOrWhiteSpace($MinVersion)) { throw 'Versao minima nao informada.' }
+        $params.DisplayNamePattern = $DisplayNamePattern
+        $params.MinVersion = $MinVersion
+    }
+    elseif ($Action -eq 'RunFileDetection') {
+        if ([string]::IsNullOrWhiteSpace($FilePath)) { throw 'Caminho do arquivo nao informado.' }
+        $params.FilePath = $FilePath
+        if (-not [string]::IsNullOrWhiteSpace($MinVersion)) { $params.MinVersion = $MinVersion }
     }
 
     $invoke = Invoke-CMScript -ScriptGuid $helperResult.Helper.ScriptGuid -Device $device -ScriptParameter $params -PassThru -Confirm:$false -ErrorAction Stop
@@ -725,12 +821,25 @@ function Invoke-RemoteScriptAction {
 }
 
 function Invoke-RemoteDetection {
+    <#
+        Roda a deteccao na maquina teste via SCCM/SYSTEM usando parametros
+        curtos (DisplayNamePattern+MinVersion OU FilePath+MinVersion) em vez
+        de transportar um script inteiro em Base64 - evita o limite de
+        tamanho de parametro do recurso Run Scripts do SCCM.
+    #>
     param(
         [Parameter(Mandatory)][string]$ComputerName,
-        [Parameter(Mandatory)][string]$DetectionScriptText
+        [string]$DisplayNamePattern,
+        [string]$MinVersion,
+        [string]$FilePath
     )
 
-    $status = Invoke-CMSystemAction -ComputerName $ComputerName -Action RunDetection -DetectionScriptText $DetectionScriptText -TimeoutSeconds 90
+    if (-not [string]::IsNullOrWhiteSpace($FilePath)) {
+        $status = Invoke-CMSystemAction -ComputerName $ComputerName -Action RunFileDetection -FilePath $FilePath -MinVersion $MinVersion -TimeoutSeconds 90
+    }
+    else {
+        $status = Invoke-CMSystemAction -ComputerName $ComputerName -Action RunRegistryDetection -DisplayNamePattern $DisplayNamePattern -MinVersion $MinVersion -TimeoutSeconds 90
+    }
     return $status.ScriptOutput
 }
 
@@ -1784,36 +1893,62 @@ function Build-CurrentDetectionText {
 }
 
 $btnTestDetection.Add_Click({
-    $script:DetectionText = Build-CurrentDetectionText
-    if (-not $script:DetectionText) { return }
-
-    if ($script:DetectionMode -eq 'File') {
-        Write-Log "Testando deteccao por ARQUIVO: $($script:DetectionFilePath)"
-    } else {
-        Write-Log "Testando deteccao por REGISTRO: DisplayName like '*$($txtDetectPattern.Text)*', versao minima $($txtVersion.Text)"
-    }
-
     try {
         if ($script:RemoteTestConnected -and $script:RemoteTestComputer) {
-            Write-Log "Executando script de deteccao em $($script:RemoteTestComputer) via SCCM como SYSTEM..."
-            $raw = Invoke-RemoteDetection -ComputerName $script:RemoteTestComputer -DetectionScriptText $script:DetectionText
-            $resultado = $raw
-            try {
-                $obj = $raw | ConvertFrom-Json -ErrorAction Stop
-                Write-Log "Contexto remoto: $($obj.Identity)"
-                $resultado = $obj.Result
-            } catch {}
+            if ($script:DetectionMode -eq 'File' -and $script:DetectionFilePath) {
+                Write-Log "Testando deteccao por ARQUIVO em $($script:RemoteTestComputer) via SCCM/SYSTEM: $($script:DetectionFilePath)"
+                $raw = Invoke-RemoteDetection -ComputerName $script:RemoteTestComputer -FilePath $script:DetectionFilePath -MinVersion $txtVersion.Text
+            }
+            else {
+                if ([string]::IsNullOrWhiteSpace($txtDetectPattern.Text) -or [string]::IsNullOrWhiteSpace($txtVersion.Text)) {
+                    [System.Windows.Forms.MessageBox]::Show("Preencha o padrao do DisplayName e a Versao (ou use 'Detectar por Arquivo/Executavel...').", "Aviso") | Out-Null
+                    return
+                }
+                Write-Log "Testando deteccao por REGISTRO em $($script:RemoteTestComputer) via SCCM/SYSTEM: DisplayName like '*$($txtDetectPattern.Text)*', versao minima $($txtVersion.Text)"
+                $raw = Invoke-RemoteDetection -ComputerName $script:RemoteTestComputer -DisplayNamePattern $txtDetectPattern.Text -MinVersion $txtVersion.Text
+            }
+
+            $obj = $null
+            try { $obj = $raw | ConvertFrom-Json -ErrorAction Stop } catch {}
+
+            if (-not $obj) {
+                Write-Log "Nao foi possivel interpretar o retorno da maquina teste. Retorno bruto: $raw"
+                return
+            }
+
+            Write-Log "Contexto remoto: $($obj.Identity)"
+
+            if ($obj.Correspondencias -and $obj.Correspondencias.Count -gt 0) {
+                Write-Log "Candidatos encontrados no registro (nome bateu, mesmo que a versao nao bata ainda):"
+                foreach ($linha in $obj.Correspondencias) { Write-Log "  - $linha" }
+            }
+            elseif ($script:DetectionMode -ne 'File') {
+                Write-Log "NENHUM candidato encontrado com esse padrao de nome em HKLM/WOW6432Node/HKU nessa maquina."
+            }
+
+            if ($script:DetectionMode -eq 'File') {
+                Write-Log "Arquivo existe? $($obj.Existe) | Versao do arquivo: $($obj.FileVersion)"
+            }
+
+            if ($obj.Result -eq 'Instalado') {
+                Write-Log "RESULTADO: Instalado (deteccao OK)"
+            } else {
+                Write-Log "RESULTADO: Nao detectado."
+            }
         }
         else {
+            $script:DetectionText = Build-CurrentDetectionText
+            if (-not $script:DetectionText) { return }
+
             Write-Log "Sem maquina teste conectada via SCCM - executando script de deteccao LOCALMENTE neste computador ($env:COMPUTERNAME)."
             $resultado = Invoke-Expression $script:DetectionText
-        }
 
-        if (($resultado | Out-String).Trim() -eq 'Instalado') {
-            Write-Log "RESULTADO: Instalado (deteccao OK)"
-        }
-        else {
-            Write-Log "RESULTADO: Nao detectado. Retorno: $(($resultado | Out-String).Trim())"
+            if (($resultado | Out-String).Trim() -eq 'Instalado') {
+                Write-Log "RESULTADO: Instalado (deteccao OK)"
+            }
+            else {
+                Write-Log "RESULTADO: Nao detectado. Retorno: $(($resultado | Out-String).Trim())"
+            }
         }
     }
     catch { Write-Log "Erro ao rodar deteccao: $($_.Exception.Message)" }
