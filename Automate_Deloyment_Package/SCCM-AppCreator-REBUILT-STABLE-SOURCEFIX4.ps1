@@ -750,10 +750,25 @@ function Wait-CMScriptResult {
     $namespace = "root\SMS\site_$SiteCode"
     $elapsed = 0
     $sawStatus = $false
+    $taskId = $null
 
     do {
         try {
-            $status = Get-CimInstance -ComputerName $SiteServer -Namespace $namespace -ClassName SMS_ScriptsExecutionStatus -Filter "ClientOperationID = '$OperationID'" -ErrorAction Stop |
+            # 1) A OperationID identifica a execucao enviada pelo Run Script.
+            # O payload confiavel nao deve ser assumido diretamente em
+            # SMS_ScriptsExecutionStatus. Primeiro resolvemos o TaskID real.
+            if (-not $taskId) {
+                $execTask = Get-CimInstance -ComputerName $SiteServer -Namespace $namespace -ClassName SMS_ScriptsExecutionTask -ErrorAction SilentlyContinue |
+                    Where-Object { [uint32]$_.ClientOperationID -eq [uint32]$OperationID } |
+                    Sort-Object ClientOperationID -Descending |
+                    Select-Object -First 1
+                if ($execTask -and $execTask.TaskID) {
+                    $taskId = [uint32]$execTask.TaskID
+                }
+            }
+
+            # 2) O status individual continua sendo usado para erro/conectividade.
+            $status = Get-CimInstance -ComputerName $SiteServer -Namespace $namespace -ClassName SMS_ScriptsExecutionStatus -Filter "ClientOperationID = '$OperationID'" -ErrorAction SilentlyContinue |
                 Sort-Object LastUpdateTime -Descending |
                 Select-Object -First 1
         }
@@ -768,19 +783,39 @@ function Wait-CMScriptResult {
                 throw "Run Script retornou erro na maquina: $scriptError"
             }
 
-            # Para o teste de CONEXAO nao precisamos de payload. O simples
-            # aparecimento do status desta OperationID prova que o cliente
-            # recebeu/processou o Run Script via SCCM. Exigir ScriptOutput aqui
-            # foi a regressao introduzida na SOURCEFIX2.
+            # Ping: o simples status prova que o cliente respondeu.
             if (-not $RequireScriptOutput) {
                 return $status
             }
+        }
 
-            # Acoes que realmente devolvem dados (inventario/deteccao) continuam
-            # aguardando o payload ser gravado pelo SCCM.
-            $scriptOutput = [string]$status.ScriptOutput
-            if (-not [string]::IsNullOrWhiteSpace($scriptOutput)) {
-                return $status
+        if ($RequireScriptOutput -and $taskId) {
+            try {
+                # 3) O resultado consolidado da execucao fica no Summary.
+                # GroupType 1 normalmente representa os resultados retornados
+                # pelos clientes. Nao limitamos exclusivamente a ele para manter
+                # compatibilidade com builds diferentes do ConfigMgr.
+                $summaries = @(Get-CimInstance -ComputerName $SiteServer -Namespace $namespace -ClassName SMS_ScriptsExecutionSummary -Filter "TaskID = '$taskId'" -ErrorAction SilentlyContinue)
+
+                $summaryWithOutput = $summaries |
+                    Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_.ScriptOutput) } |
+                    Sort-Object @{Expression={ if ($_.GroupType -eq 1) { 0 } else { 1 } }} |
+                    Select-Object -First 1
+
+                if ($summaryWithOutput) {
+                    return [PSCustomObject]@{
+                        ClientOperationID = $OperationID
+                        TaskID            = $taskId
+                        ScriptOutput      = [string]$summaryWithOutput.ScriptOutput
+                        ScriptError       = if ($status) { [string]$status.ScriptError } else { '' }
+                        LastUpdateTime    = if ($status) { $status.LastUpdateTime } else { $null }
+                        ResultSource      = 'SMS_ScriptsExecutionSummary'
+                    }
+                }
+            }
+            catch {
+                # Continua aguardando: alguns sites demoram alguns segundos para
+                # popular o Summary mesmo depois de a execucao ja constar no status.
             }
         }
 
@@ -790,10 +825,10 @@ function Wait-CMScriptResult {
     } while ($elapsed -lt $TimeoutSeconds)
 
     if ($RequireScriptOutput -and $sawStatus) {
-        throw "Timeout aguardando o ScriptOutput da maquina pelo SCCM apos $TimeoutSeconds segundos. O cliente respondeu ao Run Script, mas o payload ainda nao foi disponibilizado pelo SMS Provider."
+        throw "O cliente respondeu ao Run Script, mas o SMS Provider nao disponibilizou o payload em SMS_ScriptsExecutionSummary apos $TimeoutSeconds segundos. OperationID=$OperationID TaskID=$taskId."
     }
 
-    throw "Timeout aguardando retorno da maquina pelo SCCM apos $TimeoutSeconds segundos. Verifique se o cliente esta online e os logs Scripts.log/CcmMessaging.log."
+    throw "Timeout aguardando retorno da maquina pelo SCCM apos $TimeoutSeconds segundos. Verifique Scripts.log/CcmMessaging.log."
 }
 
 function Invoke-CMSystemAction {
@@ -1142,7 +1177,7 @@ $script:OriginalSourcePath  = $null # caminho UNC real, sempre usado no -Content
 $script:DetectionMode     = 'Registry'  # 'Registry' ou 'File'
 $script:DetectionFilePath = $null       # caminho do executavel, quando DetectionMode = 'File'
 $script:DetectedRegistryApp = $null      # entrada real descoberta automaticamente na maquina teste
-$script:BuildId = '2026.08.26-REBUILT-STABLE-SOURCEFIX3'
+$script:BuildId = '2026.08.26-REBUILT-STABLE-SOURCEFIX4'
 
 # ----------------------------------------------------------------------------
 # GUI
