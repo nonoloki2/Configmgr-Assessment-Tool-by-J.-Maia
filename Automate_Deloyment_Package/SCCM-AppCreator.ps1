@@ -1,4 +1,4 @@
-<#
+﻿<#
 ==============================================================================
  SCCM-AppCreator.ps1
 ==============================================================================
@@ -311,75 +311,301 @@ function Connect-ToSCCM {
     }
 }
 
-function Connect-RemoteTestMachine {
+function Get-CMAppCreatorHelperScriptText {
     <#
-        Cria uma sessao PowerShell Remoting (WinRM) com a maquina teste.
-        Necessario quando o script roda no servidor SCCM (via CyberArk) e
-        a conta de servico nao tem/nao pode ter acesso a maquina teste -
-        nesse caso o teste e feito com as SUAS credenciais, via sessao remota.
+        Helper permanente do SCCM App Creator.
+        Ele e executado pelo recurso Run Scripts do Configuration Manager no
+        cliente alvo. O script roda no contexto do cliente SCCM (SYSTEM), sem
+        WinRM, sem LAPS e sem CyberArk para a maquina teste.
     #>
+
+    return @'
+param(
+    [Parameter(Mandatory=$true)]
+    [ValidateSet('Ping','RunDetection','RunSourceScript','InventoryInstalledSoftware')]
+    [string]$Action,
+
+    [string]$DetectionScriptB64 = '',
+    [string]$SourcePath = '',
+    [string]$ScriptType = '',
+    [string]$ScriptFile = ''
+)
+
+$ErrorActionPreference = 'Stop'
+
+function Get-ExecutionIdentity {
+    try { return [System.Security.Principal.WindowsIdentity]::GetCurrent().Name }
+    catch { return (& whoami.exe 2>$null) }
+}
+
+switch ($Action) {
+    'Ping' {
+        [PSCustomObject]@{
+            ComputerName = $env:COMPUTERNAME
+            Identity     = Get-ExecutionIdentity
+            Timestamp    = (Get-Date).ToString('s')
+            Mode         = 'SCCM Run Script'
+        } | ConvertTo-Json -Compress
+    }
+
+    'RunDetection' {
+        if ([string]::IsNullOrWhiteSpace($DetectionScriptB64)) {
+            throw 'DetectionScriptB64 nao informado.'
+        }
+
+        $bytes = [Convert]::FromBase64String($DetectionScriptB64)
+        $text  = [Text.Encoding]::UTF8.GetString($bytes)
+        $sb    = [ScriptBlock]::Create($text)
+
+        $result = & $sb 2>&1 | Out-String
+        [PSCustomObject]@{
+            ComputerName = $env:COMPUTERNAME
+            Identity     = Get-ExecutionIdentity
+            Result       = $result.Trim()
+        } | ConvertTo-Json -Compress
+    }
+
+    'RunSourceScript' {
+        if ([string]::IsNullOrWhiteSpace($SourcePath)) { throw 'SourcePath nao informado.' }
+        if ([string]::IsNullOrWhiteSpace($ScriptFile)) { throw 'ScriptFile nao informado.' }
+        if (-not (Test-Path -LiteralPath $SourcePath)) {
+            throw "SYSTEM nao conseguiu acessar a pasta de origem: $SourcePath"
+        }
+
+        Push-Location -LiteralPath $SourcePath
+        try {
+            if ($ScriptType -eq 'PowerShell') {
+                $output = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $SourcePath $ScriptFile) 2>&1 | Out-String
+            }
+            elseif ($ScriptType -eq 'Batch') {
+                $output = & cmd.exe /c ('"{0}"' -f (Join-Path $SourcePath $ScriptFile)) 2>&1 | Out-String
+            }
+            else {
+                throw "Tipo de script nao suportado: $ScriptType"
+            }
+        }
+        finally {
+            Pop-Location
+        }
+
+        [PSCustomObject]@{
+            ComputerName = $env:COMPUTERNAME
+            Identity     = Get-ExecutionIdentity
+            Script       = $ScriptFile
+            Output       = $output.Trim()
+        } | ConvertTo-Json -Compress
+    }
+
+    'InventoryInstalledSoftware' {
+        $paths = @(
+            'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+            'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+        )
+
+        Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_.DisplayName) } |
+            Select-Object DisplayName, DisplayVersion, Publisher, PSPath, UninstallString, QuietUninstallString |
+            Sort-Object DisplayName |
+            ConvertTo-Json -Compress -Depth 3
+    }
+}
+'@
+}
+
+function Ensure-CMAppCreatorHelperScript {
     param(
-        [Parameter(Mandatory)][string]$ComputerName,
-        [Parameter(Mandatory)][System.Management.Automation.PSCredential]$Credential
+        [string]$ScriptName = 'SCCM-AppCreator-SystemHelper'
     )
 
     try {
-        if (-not (Test-WSMan -ComputerName $ComputerName -Credential $Credential -Authentication Default -ErrorAction Stop)) {
-            throw "WinRM nao respondeu em $ComputerName."
+        $helper = Get-CMScript -ScriptName $ScriptName -Fast -ErrorAction SilentlyContinue |
+            Where-Object { $_.ScriptName -eq $ScriptName } |
+            Select-Object -First 1
+
+        if (-not $helper) {
+            $helperText = Get-CMAppCreatorHelperScriptText
+            New-CMScript -ScriptName $ScriptName -ScriptText $helperText -Fast -ErrorAction Stop | Out-Null
+            Start-Sleep -Milliseconds 500
+            $helper = Get-CMScript -ScriptName $ScriptName -Fast -ErrorAction Stop |
+                Where-Object { $_.ScriptName -eq $ScriptName } |
+                Select-Object -First 1
         }
 
-        $session = New-PSSession -ComputerName $ComputerName -Credential $Credential -ErrorAction Stop
-        return [PSCustomObject]@{ Sucesso = $true; Sessao = $session; Mensagem = "Sessao remota aberta com $ComputerName." }
+        if (-not $helper) {
+            throw "Nao foi possivel localizar/criar o helper '$ScriptName'."
+        }
+
+        # ApprovalState 3 = Approved. Em ambientes onde o autor nao pode
+        # aprovar o proprio script, a tentativa abaixo falha e a GUI explica
+        # que a aprovacao precisa ser feita uma unica vez por outro admin.
+        if ([int]$helper.ApprovalState -ne 3) {
+            try {
+                Approve-CMScript -InputObject $helper -Comment 'Helper do SCCM App Creator para testes como SYSTEM.' -Confirm:$false -ErrorAction Stop | Out-Null
+                Start-Sleep -Milliseconds 500
+                $helper = Get-CMScript -ScriptName $ScriptName -Fast -ErrorAction Stop |
+                    Where-Object { $_.ScriptName -eq $ScriptName } |
+                    Select-Object -First 1
+            }
+            catch {
+                return [PSCustomObject]@{
+                    Sucesso = $false
+                    Helper  = $helper
+                    PrecisaAprovacao = $true
+                    Mensagem = "O helper '$ScriptName' foi criado, mas ainda precisa ser APROVADO no SCCM em Software Library > Scripts. Por padrao, o autor nao pode aprovar o proprio script. Depois de aprovado, clique novamente em Conectar via SCCM / SYSTEM."
+                }
+            }
+        }
+
+        if ([int]$helper.ApprovalState -ne 3) {
+            return [PSCustomObject]@{
+                Sucesso = $false
+                Helper  = $helper
+                PrecisaAprovacao = $true
+                Mensagem = "O helper '$ScriptName' existe, mas ainda nao esta aprovado no SCCM."
+            }
+        }
+
+        return [PSCustomObject]@{ Sucesso = $true; Helper = $helper; PrecisaAprovacao = $false; Mensagem = "Helper '$ScriptName' aprovado e pronto." }
     }
     catch {
-        return [PSCustomObject]@{ Sucesso = $false; Sessao = $null; Mensagem = $_.Exception.Message }
+        return [PSCustomObject]@{ Sucesso = $false; Helper = $null; PrecisaAprovacao = $false; Mensagem = $_.Exception.Message }
+    }
+}
+
+function Wait-CMScriptResult {
+    param(
+        [Parameter(Mandatory)][uint32]$OperationID,
+        [Parameter(Mandatory)][string]$SiteServer,
+        [Parameter(Mandatory)][string]$SiteCode,
+        [int]$TimeoutSeconds = 90
+    )
+
+    $namespace = "root\SMS\site_$SiteCode"
+    $elapsed = 0
+
+    do {
+        try {
+            $status = Get-CimInstance -ComputerName $SiteServer -Namespace $namespace -ClassName SMS_ScriptsExecutionStatus -Filter "ClientOperationID = '$OperationID'" -ErrorAction Stop |
+                Sort-Object LastUpdateTime -Descending |
+                Select-Object -First 1
+        }
+        catch {
+            throw "Falha consultando o resultado do Run Script no SMS Provider: $($_.Exception.Message)"
+        }
+
+        if ($status) { return $status }
+
+        Start-Sleep -Seconds 2
+        $elapsed += 2
+        [System.Windows.Forms.Application]::DoEvents()
+    } while ($elapsed -lt $TimeoutSeconds)
+
+    throw "Timeout aguardando retorno da maquina pelo SCCM apos $TimeoutSeconds segundos. Verifique se o cliente esta online e os logs Scripts.log/CcmMessaging.log."
+}
+
+function Invoke-CMSystemAction {
+    param(
+        [Parameter(Mandatory)][string]$ComputerName,
+        [Parameter(Mandatory)][ValidateSet('Ping','RunDetection','RunSourceScript','InventoryInstalledSoftware')][string]$Action,
+        [string]$DetectionScriptText,
+        [string]$SourcePath,
+        [PSCustomObject]$ScriptInfo,
+        [int]$TimeoutSeconds = 90
+    )
+
+    if (-not $script:SiteServer -or -not $script:SiteCode) {
+        throw 'Conecte primeiro ao SCCM no grupo 1 da interface.'
+    }
+
+    $device = Get-CMDevice -Name $ComputerName -Fast -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -eq $ComputerName } |
+        Select-Object -First 1
+
+    if (-not $device) {
+        throw "A maquina '$ComputerName' nao foi encontrada como device no SCCM."
+    }
+
+    $helperResult = Ensure-CMAppCreatorHelperScript
+    if (-not $helperResult.Sucesso) {
+        throw $helperResult.Mensagem
+    }
+
+    $params = @{ Action = $Action }
+
+    if ($Action -eq 'RunDetection') {
+        if ([string]::IsNullOrWhiteSpace($DetectionScriptText)) { throw 'Script de deteccao vazio.' }
+        $params.DetectionScriptB64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($DetectionScriptText))
+    }
+    elseif ($Action -eq 'RunSourceScript') {
+        if (-not $ScriptInfo) { throw 'Informacoes do script de install/uninstall nao fornecidas.' }
+        if ([string]::IsNullOrWhiteSpace($SourcePath)) { throw 'Pasta de origem nao informada.' }
+        $params.SourcePath = $SourcePath
+        $params.ScriptType = $ScriptInfo.Tipo
+        $params.ScriptFile = $ScriptInfo.Arquivo
+    }
+
+    $invoke = Invoke-CMScript -ScriptGuid $helperResult.Helper.ScriptGuid -Device $device -ScriptParameter $params -PassThru -Confirm:$false -ErrorAction Stop
+    if (-not $invoke -or -not $invoke.OperationID) {
+        throw 'O SCCM nao retornou OperationID para a execucao do Run Script.'
+    }
+
+    return Wait-CMScriptResult -OperationID ([uint32]$invoke.OperationID) -SiteServer $script:SiteServer -SiteCode $script:SiteCode -TimeoutSeconds $TimeoutSeconds
+}
+
+function Connect-RemoteTestMachine {
+    <#
+        Valida a maquina teste pelo proprio SCCM e executa um Ping pelo recurso
+        Run Scripts. Nao abre PSSession e nao solicita credenciais da estacao.
+    #>
+    param([Parameter(Mandatory)][string]$ComputerName)
+
+    try {
+        $status = Invoke-CMSystemAction -ComputerName $ComputerName -Action Ping -TimeoutSeconds 60
+        $output = $status.ScriptOutput
+        $identity = $null
+        try {
+            $json = $output | ConvertFrom-Json -ErrorAction Stop
+            $identity = $json.Identity
+        } catch {}
+
+        return [PSCustomObject]@{
+            Sucesso  = $true
+            Mensagem = if ($identity) { "Maquina respondeu pelo SCCM. Contexto remoto: $identity" } else { "Maquina respondeu pelo SCCM Run Script." }
+            Output   = $output
+        }
+    }
+    catch {
+        return [PSCustomObject]@{ Sucesso = $false; Mensagem = $_.Exception.Message; Output = $null }
     }
 }
 
 function Invoke-RemoteScriptAction {
     <#
-        Copia a pasta de origem para a maquina teste (evita problema de
-        "double hop" do Kerberos) e executa o install/uninstall LOCALMENTE
-        na maquina remota, via sessao ja aberta.
+        Compatibilidade com os botoes existentes. Agora a execucao remota e
+        enviada pelo SCCM e roda no cliente como SYSTEM.
+
+        Observacao: a conta SYSTEM da maquina teste precisa conseguir ler a
+        pasta UNC de origem. Caso o share nao permita acesso para a conta do
+        computador/Dominio Computers, a GUI exibira o erro devolvido pelo helper.
     #>
     param(
-        [Parameter(Mandatory)][System.Management.Automation.Runspaces.PSSession]$Session,
+        [Parameter(Mandatory)][string]$ComputerName,
         [Parameter(Mandatory)][string]$SourceFolder,
         [Parameter(Mandatory)][PSCustomObject]$ScriptInfo
     )
 
-    $remoteBase   = "C:\Windows\Temp\SCCMAppTest"
-    $folderName   = Split-Path $SourceFolder -Leaf
-    $remoteFolder = Join-Path $remoteBase $folderName
-
-    Invoke-Command -Session $Session -ScriptBlock {
-        param($base)
-        if (-not (Test-Path $base)) { New-Item -Path $base -ItemType Directory -Force | Out-Null }
-    } -ArgumentList $remoteBase
-
-    Copy-Item -Path $SourceFolder -Destination $remoteBase -ToSession $Session -Recurse -Force
-
-    $output = Invoke-Command -Session $Session -ScriptBlock {
-        param($path, $tipo, $arquivo)
-        Set-Location $path
-        if ($tipo -eq 'PowerShell') {
-            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\$arquivo" 2>&1
-        } else {
-            & cmd.exe /c ".\$arquivo" 2>&1
-        }
-    } -ArgumentList $remoteFolder, $ScriptInfo.Tipo, $ScriptInfo.Arquivo
-
-    return $output
+    $status = Invoke-CMSystemAction -ComputerName $ComputerName -Action RunSourceScript -SourcePath $SourceFolder -ScriptInfo $ScriptInfo -TimeoutSeconds 300
+    return $status.ScriptOutput
 }
 
 function Invoke-RemoteDetection {
     param(
-        [Parameter(Mandatory)][System.Management.Automation.Runspaces.PSSession]$Session,
+        [Parameter(Mandatory)][string]$ComputerName,
         [Parameter(Mandatory)][string]$DetectionScriptText
     )
 
-    $scriptBlock = [ScriptBlock]::Create($DetectionScriptText)
-    return Invoke-Command -Session $Session -ScriptBlock $scriptBlock
+    $status = Invoke-CMSystemAction -ComputerName $ComputerName -Action RunDetection -DetectionScriptText $DetectionScriptText -TimeoutSeconds 90
+    return $status.ScriptOutput
 }
 
 function New-SCCMScriptApplication {
@@ -422,7 +648,11 @@ function New-SCCMScriptApplication {
 $script:InstallInfo   = $null
 $script:UninstallInfo = $null
 $script:DetectionText = $null
-$script:TestSession   = $null
+$script:TestSession   = $null # mantido por compatibilidade; WinRM nao e mais usado
+$script:RemoteTestConnected = $false
+$script:RemoteTestComputer  = $null
+$script:SiteServer          = $null
+$script:SiteCode            = $null
 $script:SourceCredential  = $null
 $script:SourceMappedDrive = $null   # nome do PSDrive temporario, se usado
 $script:EffectiveSourcePath = $null # caminho usado de fato para ler arquivos (UNC ou drive mapeado)
@@ -611,7 +841,7 @@ $txtTestMachine.Size = New-Object System.Drawing.Size(200, 20)
 $grpRemote.Controls.Add($txtTestMachine)
 
 $btnConnectRemote = New-Object System.Windows.Forms.Button
-$btnConnectRemote.Text = "Conectar (pede credencial)"
+$btnConnectRemote.Text = "Conectar via SCCM / SYSTEM"
 $btnConnectRemote.Location = New-Object System.Drawing.Point(375, 21)
 $btnConnectRemote.Size = New-Object System.Drawing.Size(170, 23)
 $grpRemote.Controls.Add($btnConnectRemote)
@@ -623,7 +853,7 @@ $btnDisconnectRemote.Size = New-Object System.Drawing.Size(125, 23)
 $grpRemote.Controls.Add($btnDisconnectRemote)
 
 $lblRemoteStatus = New-Object System.Windows.Forms.Label
-$lblRemoteStatus.Text = "Sem sessao remota (testes rodarao localmente, na maquina atual)."
+$lblRemoteStatus.Text = "Sem maquina teste conectada pelo SCCM (testes rodarao localmente)."
 $lblRemoteStatus.ForeColor = 'Gray'
 $lblRemoteStatus.Location = New-Object System.Drawing.Point(10, 48)
 $lblRemoteStatus.Size = New-Object System.Drawing.Size(670, 18)
@@ -720,6 +950,8 @@ $btnConnect.Add_Click({
     Write-Log "Conectando a $($txtServer.Text) ($($txtSiteCode.Text))..."
     $result = Connect-ToSCCM -SiteServer $txtServer.Text -SiteCode $txtSiteCode.Text
     if ($result.Sucesso) {
+        $script:SiteServer = $txtServer.Text.Trim()
+        $script:SiteCode   = $txtSiteCode.Text.Trim()
         $lblConnStatus.Text = $result.Mensagem
         $lblConnStatus.ForeColor = 'Green'
     } else {
@@ -910,36 +1142,54 @@ $btnScan.Add_Click({
 
 $btnConnectRemote.Add_Click({
     if ([string]::IsNullOrWhiteSpace($txtTestMachine.Text)) {
-        [System.Windows.Forms.MessageBox]::Show("Informe o nome ou IP da maquina teste.", "Aviso") | Out-Null
+        [System.Windows.Forms.MessageBox]::Show("Informe o nome da maquina teste.", "Aviso") | Out-Null
+        return
+    }
+    if (-not $script:SiteServer -or -not $script:SiteCode) {
+        [System.Windows.Forms.MessageBox]::Show("Conecte primeiro ao SCCM no grupo 1.", "Aviso") | Out-Null
         return
     }
 
-    $cred = Get-Credential -Message "Credenciais com acesso a $($txtTestMachine.Text)"
-    if (-not $cred) { return }
+    $computer = $txtTestMachine.Text.Trim()
+    $btnConnectRemote.Enabled = $false
+    $lblRemoteStatus.Text = "Validando $computer pelo SCCM..."
+    $lblRemoteStatus.ForeColor = 'DarkOrange'
+    [System.Windows.Forms.Application]::DoEvents()
 
-    Write-Log "Conectando na maquina teste $($txtTestMachine.Text) via WinRM..."
-    $result = Connect-RemoteTestMachine -ComputerName $txtTestMachine.Text -Credential $cred
+    Write-Log "Validando maquina teste $computer via SCCM Run Script (sem WinRM/sem credencial da estacao)..."
+    $result = Connect-RemoteTestMachine -ComputerName $computer
 
     if ($result.Sucesso) {
-        $script:TestSession = $result.Sessao
-        $lblRemoteStatus.Text = "Conectado a $($txtTestMachine.Text). Os testes abaixo rodarao NESSA maquina remota."
+        $script:RemoteTestConnected = $true
+        $script:RemoteTestComputer  = $computer
+        $lblRemoteStatus.Text = "Conectado via SCCM: $computer - execucao remota como SYSTEM."
         $lblRemoteStatus.ForeColor = 'Green'
-    } else {
-        $script:TestSession = $null
-        $lblRemoteStatus.Text = "Falha ao conectar: $($result.Mensagem)"
-        $lblRemoteStatus.ForeColor = 'Red'
     }
+    else {
+        $script:RemoteTestConnected = $false
+        $script:RemoteTestComputer  = $null
+        $lblRemoteStatus.Text = "Falha via SCCM: $($result.Mensagem)"
+        $lblRemoteStatus.ForeColor = 'Red'
+
+        if ($result.Mensagem -match 'APROV') {
+            [System.Windows.Forms.MessageBox]::Show(
+                $result.Mensagem,
+                "Aprovacao unica necessaria",
+                'OK', 'Information'
+            ) | Out-Null
+        }
+    }
+
     Write-Log $result.Mensagem
+    $btnConnectRemote.Enabled = $true
 })
 
 $btnDisconnectRemote.Add_Click({
-    if ($script:TestSession) {
-        Remove-PSSession -Session $script:TestSession -ErrorAction SilentlyContinue
-        $script:TestSession = $null
-        $lblRemoteStatus.Text = "Sem sessao remota (testes rodarao localmente, na maquina atual)."
-        $lblRemoteStatus.ForeColor = 'Gray'
-        Write-Log "Sessao remota encerrada."
-    }
+    $script:RemoteTestConnected = $false
+    $script:RemoteTestComputer  = $null
+    $lblRemoteStatus.Text = "Sem maquina teste conectada pelo SCCM (testes rodarao localmente)."
+    $lblRemoteStatus.ForeColor = 'Gray'
+    Write-Log "Maquina teste desconectada da sessao logica do App Creator. Nenhuma PSSession/WinRM foi usada."
 })
 
 $btnTestInstall.Add_Click({
@@ -948,10 +1198,11 @@ $btnTestInstall.Add_Click({
         return
     }
     try {
-        if ($script:TestSession -and $script:TestSession.State -eq 'Opened') {
-            Write-Log "Executando instalacao de teste REMOTAMENTE em $($txtTestMachine.Text)..."
-            $output = Invoke-RemoteScriptAction -Session $script:TestSession -SourceFolder $script:EffectiveSourcePath -ScriptInfo $script:InstallInfo
-            $output | ForEach-Object { Write-Log "  [remoto] $_" }
+        if ($script:RemoteTestConnected -and $script:RemoteTestComputer) {
+            Write-Log "Executando instalacao de teste em $($script:RemoteTestComputer) via SCCM como SYSTEM..."
+            Write-Log "A origem usada remotamente sera: $($script:OriginalSourcePath)"
+            $output = Invoke-RemoteScriptAction -ComputerName $script:RemoteTestComputer -SourceFolder $script:OriginalSourcePath -ScriptInfo $script:InstallInfo
+            Write-Log "  [SCCM/SYSTEM] $output"
         }
         else {
             Write-Log "Executando instalacao de teste LOCALMENTE em: $($script:EffectiveSourcePath)"
@@ -963,7 +1214,7 @@ $btnTestInstall.Add_Click({
             }
             Pop-Location
         }
-        Write-Log "Instalacao de teste finalizada (verifique o resultado na maquina)."
+        Write-Log "Instalacao de teste finalizada."
     }
     catch { Write-Log "Erro na instalacao de teste: $($_.Exception.Message)" }
 })
@@ -974,10 +1225,10 @@ $btnTestUninstall.Add_Click({
         return
     }
     try {
-        if ($script:TestSession -and $script:TestSession.State -eq 'Opened') {
-            Write-Log "Executando desinstalacao de teste REMOTAMENTE em $($txtTestMachine.Text)..."
-            $output = Invoke-RemoteScriptAction -Session $script:TestSession -SourceFolder $script:EffectiveSourcePath -ScriptInfo $script:UninstallInfo
-            $output | ForEach-Object { Write-Log "  [remoto] $_" }
+        if ($script:RemoteTestConnected -and $script:RemoteTestComputer) {
+            Write-Log "Executando desinstalacao de teste em $($script:RemoteTestComputer) via SCCM como SYSTEM..."
+            $output = Invoke-RemoteScriptAction -ComputerName $script:RemoteTestComputer -SourceFolder $script:OriginalSourcePath -ScriptInfo $script:UninstallInfo
+            Write-Log "  [SCCM/SYSTEM] $output"
         }
         else {
             Write-Log "Executando desinstalacao de teste LOCALMENTE em: $($script:EffectiveSourcePath)"
@@ -989,7 +1240,7 @@ $btnTestUninstall.Add_Click({
             }
             Pop-Location
         }
-        Write-Log "Desinstalacao de teste finalizada (verifique o resultado na maquina)."
+        Write-Log "Desinstalacao de teste finalizada."
     }
     catch { Write-Log "Erro na desinstalacao de teste: $($_.Exception.Message)" }
 })
@@ -999,21 +1250,29 @@ $btnTestDetection.Add_Click({
         [System.Windows.Forms.MessageBox]::Show("Preencha o padrao do DisplayName e a Versao.", "Aviso") | Out-Null
         return
     }
+
     $script:DetectionText = New-DetectionScriptText -DisplayNamePattern $txtDetectPattern.Text -MinVersion $txtVersion.Text
     try {
-        if ($script:TestSession -and $script:TestSession.State -eq 'Opened') {
-            Write-Log "Executando script de deteccao REMOTAMENTE em $($txtTestMachine.Text)..."
-            $resultado = Invoke-RemoteDetection -Session $script:TestSession -DetectionScriptText $script:DetectionText
+        if ($script:RemoteTestConnected -and $script:RemoteTestComputer) {
+            Write-Log "Executando script de deteccao em $($script:RemoteTestComputer) via SCCM como SYSTEM..."
+            $raw = Invoke-RemoteDetection -ComputerName $script:RemoteTestComputer -DetectionScriptText $script:DetectionText
+            $resultado = $raw
+            try {
+                $obj = $raw | ConvertFrom-Json -ErrorAction Stop
+                Write-Log "Contexto remoto: $($obj.Identity)"
+                $resultado = $obj.Result
+            } catch {}
         }
         else {
             Write-Log "Executando script de deteccao LOCALMENTE..."
             $resultado = Invoke-Expression $script:DetectionText
         }
 
-        if ($resultado -eq "Instalado") {
+        if (($resultado | Out-String).Trim() -eq 'Instalado') {
             Write-Log "RESULTADO: Instalado (deteccao OK)"
-        } else {
-            Write-Log "RESULTADO: Nao detectado."
+        }
+        else {
+            Write-Log "RESULTADO: Nao detectado. Retorno: $(($resultado | Out-String).Trim())"
         }
     }
     catch { Write-Log "Erro ao rodar deteccao: $($_.Exception.Message)" }
@@ -1061,9 +1320,6 @@ $btnCreate.Add_Click({
 })
 
 $form.Add_FormClosing({
-    if ($script:TestSession) {
-        Remove-PSSession -Session $script:TestSession -ErrorAction SilentlyContinue
-    }
     if (Get-PSDrive -Name 'SCCMSRC' -ErrorAction SilentlyContinue) {
         Remove-PSDrive -Name 'SCCMSRC' -Force -ErrorAction SilentlyContinue
     }
