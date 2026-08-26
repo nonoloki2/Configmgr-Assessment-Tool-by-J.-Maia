@@ -759,14 +759,28 @@ function Wait-CMScriptResult {
             throw "Falha consultando o resultado do Run Script no SMS Provider: $($_.Exception.Message)"
         }
 
-        if ($status) { return $status }
+        if ($status) {
+            # SMS_ScriptsExecutionStatus pode aparecer antes de ScriptOutput ser
+            # preenchido. Isso acontece principalmente em acoes mais demoradas
+            # como InventoryInstalledSoftware. Nao retornar prematuramente.
+            $scriptOutput = [string]$status.ScriptOutput
+            $scriptError  = [string]$status.ScriptError
+
+            if (-not [string]::IsNullOrWhiteSpace($scriptError)) {
+                throw "Run Script retornou erro na maquina: $scriptError"
+            }
+
+            if (-not [string]::IsNullOrWhiteSpace($scriptOutput)) {
+                return $status
+            }
+        }
 
         Start-Sleep -Seconds 2
         $elapsed += 2
         [System.Windows.Forms.Application]::DoEvents()
     } while ($elapsed -lt $TimeoutSeconds)
 
-    throw "Timeout aguardando retorno da maquina pelo SCCM apos $TimeoutSeconds segundos. Verifique se o cliente esta online e os logs Scripts.log/CcmMessaging.log."
+    throw "Timeout aguardando o ScriptOutput da maquina pelo SCCM apos $TimeoutSeconds segundos. O cliente respondeu, mas o resultado do Run Script nao foi concluido/preenchido. Verifique Scripts.log/CcmMessaging.log."
 }
 
 function Invoke-CMSystemAction {
@@ -1109,7 +1123,7 @@ $script:OriginalSourcePath  = $null # caminho UNC real, sempre usado no -Content
 $script:DetectionMode     = 'Registry'  # 'Registry' ou 'File'
 $script:DetectionFilePath = $null       # caminho do executavel, quando DetectionMode = 'File'
 $script:DetectedRegistryApp = $null      # entrada real descoberta automaticamente na maquina teste
-$script:BuildId = '2026.08.26-REBUILT-STABLE-SOURCEFIX1'
+$script:BuildId = '2026.08.26-REBUILT-STABLE-SOURCEFIX2'
 
 # ----------------------------------------------------------------------------
 # GUI
@@ -1736,9 +1750,10 @@ $btnDetectRegistry.Add_Click({
         return
     }
 
-    $raw = $status.ScriptOutput
+    $raw = [string]$status.ScriptOutput
+    Write-Log "[AUTO] Run Script concluido. Tamanho do ScriptOutput: $($raw.Length) caractere(s)."
     if ([string]::IsNullOrWhiteSpace($raw)) {
-        Write-Log "A maquina nao retornou nenhum dado de inventario."
+        Write-Log "A execucao terminou sem ScriptOutput utilizavel (isso nao deve mais ocorrer apos o novo sincronismo)."
         [System.Windows.Forms.MessageBox]::Show("A maquina teste nao retornou nenhum dado. Verifique se o cliente SCCM esta online.", "Aviso") | Out-Null
         return
     }
