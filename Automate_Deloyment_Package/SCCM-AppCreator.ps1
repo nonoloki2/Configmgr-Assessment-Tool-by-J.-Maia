@@ -31,6 +31,27 @@ Add-Type -AssemblyName System.Drawing
 # FUNCOES DE LOGICA (separadas da GUI para poderem ser reaproveitadas/testadas)
 # ----------------------------------------------------------------------------
 
+function Get-CleanPath {
+    <#
+        Normaliza caminhos colados de fontes como a barra de enderecos do
+        Explorer. O Windows envolve o caminho em aspas quando ele contem
+        espacos (comum em nomes de pasta), e isso vira parte literal da
+        string ao colar - o Test-Path falha silenciosamente por causa disso.
+        Remove tambem espacos/quebras de linha nas pontas e uma barra final.
+    #>
+    param([Parameter(Mandatory)][string]$Path)
+
+    $clean = $Path.Trim()
+    # Remove aspas retas e "curvas" (tipograficas) nas pontas, se existirem
+    $clean = $clean.Trim([char]'"', [char]"'", [char]0x201C, [char]0x201D, [char]0x2018, [char]0x2019)
+    $clean = $clean.Trim()
+    # Remove barra invertida final (exceto se for so a raiz "\\servidor\share")
+    if ($clean.Length -gt 2 -and $clean.EndsWith('\')) {
+        $clean = $clean.TrimEnd('\')
+    }
+    return $clean
+}
+
 function Get-InstallCommandLine {
     <#
         Verifica na pasta de origem se existe install.ps1/uninstall.ps1 ou
@@ -533,8 +554,12 @@ $btnConnect.Add_Click({
 $btnPasteFolder.Add_Click({
     try {
         if ([System.Windows.Forms.Clipboard]::ContainsText()) {
-            $texto = [System.Windows.Forms.Clipboard]::GetText().Trim()
-            $txtSourceFolder.Text = $texto
+            $textoOriginal = [System.Windows.Forms.Clipboard]::GetText()
+            $textoLimpo = Get-CleanPath -Path $textoOriginal
+            $txtSourceFolder.Text = $textoLimpo
+            if ($textoOriginal.Trim() -ne $textoLimpo) {
+                Write-Log "Caminho colado foi limpo automaticamente (aspas/espacos removidos)."
+            }
         }
         else {
             [System.Windows.Forms.MessageBox]::Show("A area de transferencia nao contem texto.", "Aviso") | Out-Null
@@ -572,13 +597,36 @@ $btnBrowse.Add_Click({
 })
 
 $btnScan.Add_Click({
-    if ([string]::IsNullOrWhiteSpace($txtSourceFolder.Text) -or -not (Test-Path $txtSourceFolder.Text)) {
-        [System.Windows.Forms.MessageBox]::Show("Selecione uma pasta de origem valida.", "Aviso") | Out-Null
+    if ([string]::IsNullOrWhiteSpace($txtSourceFolder.Text)) {
+        [System.Windows.Forms.MessageBox]::Show("Informe a pasta de origem.", "Aviso") | Out-Null
         return
     }
 
-    $script:InstallInfo   = Get-InstallCommandLine -FolderPath $txtSourceFolder.Text -Action 'install'
-    $script:UninstallInfo = Get-InstallCommandLine -FolderPath $txtSourceFolder.Text -Action 'uninstall'
+    # Sempre normaliza o texto do campo antes de validar (remove aspas/espacos
+    # que podem ter vindo de copia da barra de enderecos do Explorer).
+    $caminhoOriginal = $txtSourceFolder.Text
+    $caminhoLimpo    = Get-CleanPath -Path $caminhoOriginal
+    if ($caminhoOriginal -ne $caminhoLimpo) {
+        $txtSourceFolder.Text = $caminhoLimpo
+        Write-Log "Caminho normalizado antes de validar: '$caminhoLimpo'"
+    }
+
+    if (-not (Test-Path -LiteralPath $caminhoLimpo)) {
+        Write-Log "Falha ao validar caminho. Texto recebido entre aspas para depuracao: [`"$caminhoLimpo`"] (tamanho: $($caminhoLimpo.Length) caracteres)"
+        [System.Windows.Forms.MessageBox]::Show(
+            "Nao foi possivel acessar este caminho:`n`n$caminhoLimpo`n`n" +
+            "Verifique:`n" +
+            "- Se o caminho esta acessivel a partir desta sessao/usuario (nao so no Explorer)`n" +
+            "- Se nao sobrou aspas ou espaco extra (veja o log abaixo com o texto exato recebido)`n" +
+            "- Se a conta que esta rodando este script tem permissao de leitura no share",
+            "Nao foi possivel acessar a pasta",
+            'OK', 'Warning'
+        ) | Out-Null
+        return
+    }
+
+    $script:InstallInfo   = Get-InstallCommandLine -FolderPath $caminhoLimpo -Action 'install'
+    $script:UninstallInfo = Get-InstallCommandLine -FolderPath $caminhoLimpo -Action 'uninstall'
 
     $installStatus   = if ($script:InstallInfo.Encontrado)   { "$($script:InstallInfo.Tipo) ($($script:InstallInfo.Arquivo))" }   else { "NAO ENCONTRADO" }
     $uninstallStatus = if ($script:UninstallInfo.Encontrado) { "$($script:UninstallInfo.Tipo) ($($script:UninstallInfo.Arquivo))" } else { "NAO ENCONTRADO" }
