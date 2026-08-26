@@ -26,6 +26,7 @@
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
+Add-Type -AssemblyName Microsoft.VisualBasic
 
 # ----------------------------------------------------------------------------
 # FUNCOES DE LOGICA (separadas da GUI para poderem ser reaproveitadas/testadas)
@@ -249,7 +250,10 @@ function New-DetectionScriptText {
         Varre:
           - HKLM\...\Uninstall            (apps 64-bit nativos)
           - HKLM\...\WOW6432Node\Uninstall (apps 32-bit em SO 64-bit)
-          - HKCU\...\Uninstall            (apps instalados por usuario)
+          - HKEY_USERS\<SID>\...\Uninstall (apps instalados "so para o usuario",
+            que nao aparecem em HKLM nem no HKCU de quem executa a deteccao -
+            isso importa porque deployments "Install for System" rodam a
+            deteccao como SYSTEM, cujo proprio HKCU nao e o de ninguem)
     #>
     param(
         [Parameter(Mandatory)][string]$DisplayNamePattern,
@@ -267,7 +271,16 @@ function New-DetectionScriptText {
     'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*'
 )
 
-`$apps = Get-ItemProperty -Path `$uninstallPaths |
+if (-not (Get-PSDrive -Name HKU -ErrorAction SilentlyContinue)) {
+    New-PSDrive -Name HKU -PSProvider Registry -Root Registry::HKEY_USERS -ErrorAction SilentlyContinue | Out-Null
+}
+`$userHives = Get-ChildItem -Path 'HKU:\' -ErrorAction SilentlyContinue |
+    Where-Object { `$_.PSChildName -match '^S-1-5-21-[\d-]+$' }
+foreach (`$hive in `$userHives) {
+    `$uninstallPaths += "HKU:\`$(`$hive.PSChildName)\Software\Microsoft\Windows\CurrentVersion\Uninstall\*"
+}
+
+`$apps = Get-ItemProperty -Path `$uninstallPaths -ErrorAction SilentlyContinue |
     Where-Object { `$_.DisplayName -like "*`$displayNamePattern*" -and `$_.DisplayVersion }
 
 foreach (`$app in `$apps) {
@@ -279,6 +292,50 @@ foreach (`$app in `$apps) {
         }
     }
     catch { }
+}
+"@
+}
+
+function New-FileDetectionScriptText {
+    <#
+        Gera o TEXTO do script de deteccao baseado na EXISTENCIA (e
+        opcionalmente na versao) de um arquivo executavel especifico.
+        Usar quando o instalador nao grava nenhuma entrada em Uninstall
+        (nem HKLM, nem HKCU/HKU) - por exemplo instaladores portáteis ou
+        que copiam arquivos sem registrar nada no Windows Installer.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$FilePath,
+        [string]$MinVersion = ''
+    )
+
+    if ([string]::IsNullOrWhiteSpace($MinVersion)) {
+        return @"
+`$ErrorActionPreference = 'SilentlyContinue'
+`$caminho = '$FilePath'
+if (Test-Path -LiteralPath `$caminho) {
+    Write-Output "Instalado"
+}
+"@
+    }
+
+    return @"
+`$ErrorActionPreference = 'SilentlyContinue'
+`$caminho = '$FilePath'
+`$minVersion = [version]'$MinVersion'
+if (Test-Path -LiteralPath `$caminho) {
+    try {
+        `$fileVersionRaw = (Get-Item -LiteralPath `$caminho).VersionInfo.FileVersion
+        `$fv = [version](`$fileVersionRaw -replace '[^0-9.]', '')
+        if (`$fv -ge `$minVersion) {
+            Write-Output "Instalado"
+        }
+    }
+    catch {
+        # Se o arquivo nao tiver informacao de versao legivel, considera
+        # instalado apenas pela existencia (mais permissivo que falhar).
+        Write-Output "Instalado"
+    }
 }
 "@
 }
@@ -322,13 +379,15 @@ function Get-CMAppCreatorHelperScriptText {
     return @'
 param(
     [Parameter(Mandatory=$true)]
-    [ValidateSet('Ping','RunDetection','RunSourceScript','InventoryInstalledSoftware')]
+    [ValidateSet('Ping','RunDetection','RunSourceScript','InventoryInstalledSoftware','FindExecutable')]
     [string]$Action,
 
     [string]$DetectionScriptB64 = '',
     [string]$SourcePath = '',
     [string]$ScriptType = '',
-    [string]$ScriptFile = ''
+    [string]$ScriptFile = '',
+    [string]$NamePattern = '',
+    [string]$ExtraRoots = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -397,16 +456,76 @@ switch ($Action) {
     }
 
     'InventoryInstalledSoftware' {
+        # Uninstall nativo (64-bit) e WOW6432Node (apps 32-bit em SO 64-bit).
         $paths = @(
             'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
             'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
         )
 
-        Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
-            Where-Object { -not [string]::IsNullOrWhiteSpace($_.DisplayName) } |
-            Select-Object DisplayName, DisplayVersion, Publisher, PSPath, UninstallString, QuietUninstallString |
-            Sort-Object DisplayName |
-            ConvertTo-Json -Compress -Depth 3
+        $resultados = @(
+            Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
+                Where-Object { -not [string]::IsNullOrWhiteSpace($_.DisplayName) } |
+                Select-Object DisplayName, DisplayVersion, Publisher, PSPath, UninstallString, QuietUninstallString,
+                    @{Name='Escopo'; Expression={'Maquina (HKLM)'}}
+        )
+
+        # Instalacoes "so para o usuario atual" (ALLUSERS != 1 no MSI, ou instaladores
+        # que escrevem em HKCU) nao aparecem em HKLM. Como este script roda como
+        # SYSTEM, o HKCU do processo e o do proprio SYSTEM - por isso e preciso
+        # varrer os hives de USUARIO carregados em HKEY_USERS diretamente.
+        try {
+            if (-not (Get-PSDrive -Name HKU -ErrorAction SilentlyContinue)) {
+                New-PSDrive -Name HKU -PSProvider Registry -Root Registry::HKEY_USERS -ErrorAction SilentlyContinue | Out-Null
+            }
+
+            $userHives = Get-ChildItem -Path 'HKU:\' -ErrorAction SilentlyContinue |
+                Where-Object { $_.PSChildName -match '^S-1-5-21-[\d-]+$' }
+
+            foreach ($hive in $userHives) {
+                $userUninstallPath = "HKU:\$($hive.PSChildName)\Software\Microsoft\Windows\CurrentVersion\Uninstall\*"
+                $resultados += @(
+                    Get-ItemProperty -Path $userUninstallPath -ErrorAction SilentlyContinue |
+                        Where-Object { -not [string]::IsNullOrWhiteSpace($_.DisplayName) } |
+                        Select-Object DisplayName, DisplayVersion, Publisher, PSPath, UninstallString, QuietUninstallString,
+                            @{Name='Escopo'; Expression={"Usuario ($($hive.PSChildName))"}}
+                )
+            }
+        }
+        catch { }
+
+        $resultados | Sort-Object DisplayName | ConvertTo-Json -Compress -Depth 3
+    }
+
+    'FindExecutable' {
+        if ([string]::IsNullOrWhiteSpace($NamePattern)) { throw 'NamePattern nao informado.' }
+
+        $raizes = New-Object System.Collections.Generic.List[string]
+        foreach ($r in @($env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:ProgramData)) {
+            if ($r -and (Test-Path -LiteralPath $r)) { $raizes.Add($r) }
+        }
+        if (-not [string]::IsNullOrWhiteSpace($ExtraRoots)) {
+            foreach ($extra in ($ExtraRoots -split ';')) {
+                $extraTrim = $extra.Trim()
+                if ($extraTrim -and (Test-Path -LiteralPath $extraTrim)) { $raizes.Add($extraTrim) }
+            }
+        }
+
+        $encontrados = New-Object System.Collections.Generic.List[object]
+        foreach ($raiz in ($raizes | Select-Object -Unique)) {
+            Get-ChildItem -LiteralPath $raiz -Filter $NamePattern -Recurse -File -Depth 6 -ErrorAction SilentlyContinue |
+                ForEach-Object {
+                    $versao = $null
+                    try { $versao = $_.VersionInfo.FileVersion } catch { }
+                    $encontrados.Add([PSCustomObject]@{
+                        FullName      = $_.FullName
+                        FileVersion   = $versao
+                        LastWriteTime = $_.LastWriteTime.ToString('s')
+                        LengthKB      = [math]::Round($_.Length / 1KB, 0)
+                    })
+                }
+        }
+
+        ($encontrados | Select-Object -First 200) | ConvertTo-Json -Compress -Depth 3
     }
 }
 '@
@@ -414,7 +533,7 @@ switch ($Action) {
 
 function Ensure-CMAppCreatorHelperScript {
     param(
-        [string]$ScriptName = 'SCCM-AppCreator-SystemHelper'
+        [string]$ScriptName = 'SCCM-AppCreator-SystemHelper-v2'
     )
 
     try {
@@ -506,10 +625,12 @@ function Wait-CMScriptResult {
 function Invoke-CMSystemAction {
     param(
         [Parameter(Mandatory)][string]$ComputerName,
-        [Parameter(Mandatory)][ValidateSet('Ping','RunDetection','RunSourceScript','InventoryInstalledSoftware')][string]$Action,
+        [Parameter(Mandatory)][ValidateSet('Ping','RunDetection','RunSourceScript','InventoryInstalledSoftware','FindExecutable')][string]$Action,
         [string]$DetectionScriptText,
         [string]$SourcePath,
         [PSCustomObject]$ScriptInfo,
+        [string]$NamePattern,
+        [string]$ExtraRoots,
         [int]$TimeoutSeconds = 90
     )
 
@@ -542,6 +663,11 @@ function Invoke-CMSystemAction {
         $params.SourcePath = $SourcePath
         $params.ScriptType = $ScriptInfo.Tipo
         $params.ScriptFile = $ScriptInfo.Arquivo
+    }
+    elseif ($Action -eq 'FindExecutable') {
+        if ([string]::IsNullOrWhiteSpace($NamePattern)) { throw 'Padrao de nome de arquivo nao informado.' }
+        $params.NamePattern = $NamePattern
+        if (-not [string]::IsNullOrWhiteSpace($ExtraRoots)) { $params.ExtraRoots = $ExtraRoots }
     }
 
     $invoke = Invoke-CMScript -ScriptGuid $helperResult.Helper.ScriptGuid -Device $device -ScriptParameter $params -PassThru -Confirm:$false -ErrorAction Stop
@@ -619,11 +745,13 @@ function Show-InstalledSoftwarePicker {
     #>
     param(
         [Parameter(Mandatory)][array]$Items,
-        [string]$InitialFilter = ''
+        [string]$InitialFilter = '',
+        [string]$WindowTitle = "Selecione o aplicativo detectado no registro da maquina teste",
+        [string[]]$ColumnHeaders = @("Nome (DisplayName)", "Versao", "Fabricante")
     )
 
     $picker = New-Object System.Windows.Forms.Form
-    $picker.Text = "Selecione o aplicativo detectado no registro da maquina teste"
+    $picker.Text = $WindowTitle
     $picker.Size = New-Object System.Drawing.Size(660, 460)
     $picker.StartPosition = 'CenterParent'
     $picker.FormBorderStyle = 'FixedDialog'
@@ -649,9 +777,9 @@ function Show-InstalledSoftwarePicker {
     $listView.FullRowSelect = $true
     $listView.MultiSelect = $false
     $listView.GridLines = $true
-    [void]$listView.Columns.Add("Nome (DisplayName)", 320)
-    [void]$listView.Columns.Add("Versao", 110)
-    [void]$listView.Columns.Add("Fabricante", 175)
+    [void]$listView.Columns.Add($ColumnHeaders[0], 320)
+    [void]$listView.Columns.Add($ColumnHeaders[1], 110)
+    [void]$listView.Columns.Add($ColumnHeaders[2], 175)
     $picker.Controls.Add($listView)
 
     $script:__pickerItems = $Items
@@ -765,13 +893,15 @@ $script:SourceCredential  = $null
 $script:SourceMappedDrive = $null   # nome do PSDrive temporario, se usado
 $script:EffectiveSourcePath = $null # caminho usado de fato para ler arquivos (UNC ou drive mapeado)
 $script:OriginalSourcePath  = $null # caminho UNC real, sempre usado no -ContentLocation do SCCM
+$script:DetectionMode     = 'Registry'  # 'Registry' ou 'File'
+$script:DetectionFilePath = $null       # caminho do executavel, quando DetectionMode = 'File'
 
 # ----------------------------------------------------------------------------
 # GUI
 # ----------------------------------------------------------------------------
 $form                  = New-Object System.Windows.Forms.Form
 $form.Text             = "SCCM App Creator - Aplicacoes baseadas em Script"
-$form.Size             = New-Object System.Drawing.Size(720, 880)
+$form.Size             = New-Object System.Drawing.Size(720, 905)
 $form.StartPosition    = "CenterScreen"
 $form.FormBorderStyle  = 'FixedDialog'
 $form.MaximizeBox      = $false
@@ -934,7 +1064,7 @@ $grpApp.Controls.Add($lblScanResult)
 $grpRemote = New-Object System.Windows.Forms.GroupBox
 $grpRemote.Text = "3. Maquina de Teste (Remota - opcional, use quando o script roda no servidor)"
 $grpRemote.Location = New-Object System.Drawing.Point(10, 360)
-$grpRemote.Size = New-Object System.Drawing.Size(690, 100)
+$grpRemote.Size = New-Object System.Drawing.Size(690, 125)
 $form.Controls.Add($grpRemote)
 
 $lblTestMachine = New-Object System.Windows.Forms.Label
@@ -968,16 +1098,36 @@ $lblRemoteStatus.Size = New-Object System.Drawing.Size(670, 18)
 $grpRemote.Controls.Add($lblRemoteStatus)
 
 $btnDetectRegistry = New-Object System.Windows.Forms.Button
-$btnDetectRegistry.Text = "Detectar no Registro da Maquina Teste (preenche DisplayName/Versao)"
+$btnDetectRegistry.Text = "Detectar no Registro (DisplayName/Versao)"
 $btnDetectRegistry.Location = New-Object System.Drawing.Point(10, 70)
-$btnDetectRegistry.Size = New-Object System.Drawing.Size(420, 25)
+$btnDetectRegistry.Size = New-Object System.Drawing.Size(280, 25)
 $btnDetectRegistry.BackColor = [System.Drawing.Color]::LightSteelBlue
 $grpRemote.Controls.Add($btnDetectRegistry)
+
+$btnDetectFile = New-Object System.Windows.Forms.Button
+$btnDetectFile.Text = "Detectar por Arquivo/Executavel..."
+$btnDetectFile.Location = New-Object System.Drawing.Point(300, 70)
+$btnDetectFile.Size = New-Object System.Drawing.Size(230, 25)
+$btnDetectFile.BackColor = [System.Drawing.Color]::LightGoldenrodYellow
+$grpRemote.Controls.Add($btnDetectFile)
+
+$btnClearFileDetection = New-Object System.Windows.Forms.Button
+$btnClearFileDetection.Text = "Voltar p/ Registro"
+$btnClearFileDetection.Location = New-Object System.Drawing.Point(540, 70)
+$btnClearFileDetection.Size = New-Object System.Drawing.Size(140, 25)
+$grpRemote.Controls.Add($btnClearFileDetection)
+
+$lblDetectionMode = New-Object System.Windows.Forms.Label
+$lblDetectionMode.Text = "Modo de deteccao: Registro (DisplayName/Versao acima)."
+$lblDetectionMode.ForeColor = 'Gray'
+$lblDetectionMode.Location = New-Object System.Drawing.Point(10, 98)
+$lblDetectionMode.Size = New-Object System.Drawing.Size(670, 18)
+$grpRemote.Controls.Add($lblDetectionMode)
 
 # --- Grupo: Comandos gerados ---
 $grpCmds = New-Object System.Windows.Forms.GroupBox
 $grpCmds.Text = "4. Linhas geradas (SCCM Deployment Type)"
-$grpCmds.Location = New-Object System.Drawing.Point(10, 470)
+$grpCmds.Location = New-Object System.Drawing.Point(10, 495)
 $grpCmds.Size = New-Object System.Drawing.Size(690, 130)
 $form.Controls.Add($grpCmds)
 
@@ -1008,7 +1158,7 @@ $grpCmds.Controls.Add($txtUninstallCmd)
 # --- Grupo: Testes (local ou remoto, dependendo da sessao) ---
 $grpTest = New-Object System.Windows.Forms.GroupBox
 $grpTest.Text = "5. Testes (local por padrao, ou na maquina remota se conectada acima)"
-$grpTest.Location = New-Object System.Drawing.Point(10, 610)
+$grpTest.Location = New-Object System.Drawing.Point(10, 635)
 $grpTest.Size = New-Object System.Drawing.Size(690, 60)
 $form.Controls.Add($grpTest)
 
@@ -1039,7 +1189,7 @@ $grpTest.Controls.Add($btnCreate)
 
 # --- Log ---
 $txtLog = New-Object System.Windows.Forms.TextBox
-$txtLog.Location = New-Object System.Drawing.Point(10, 680)
+$txtLog.Location = New-Object System.Drawing.Point(10, 705)
 $txtLog.Size = New-Object System.Drawing.Size(690, 160)
 $txtLog.Multiline = $true
 $txtLog.ScrollBars = 'Vertical'
@@ -1378,17 +1528,155 @@ $btnDetectRegistry.Add_Click({
         $txtPublisher.Text = $selecionado.Publisher
     }
 
-    Write-Log "Selecionado do registro: DisplayName='$($selecionado.DisplayName)' | DisplayVersion='$($selecionado.DisplayVersion)' | Publisher='$($selecionado.Publisher)'"
+    $script:DetectionMode = 'Registry'
+    $script:DetectionFilePath = $null
+    $lblDetectionMode.Text = "Modo de deteccao: Registro (DisplayName/Versao acima)."
+    $lblDetectionMode.ForeColor = 'Gray'
+
+    Write-Log "Selecionado do registro: DisplayName='$($selecionado.DisplayName)' | DisplayVersion='$($selecionado.DisplayVersion)' | Publisher='$($selecionado.Publisher)' | Escopo='$($selecionado.Escopo)'"
 
     [System.Windows.Forms.MessageBox]::Show(
         "Campos preenchidos com base no registro real da maquina teste:`n`n" +
         "DisplayName: $($selecionado.DisplayName)`n" +
-        "DisplayVersion: $($selecionado.DisplayVersion)`n`n" +
+        "DisplayVersion: $($selecionado.DisplayVersion)`n" +
+        "Escopo: $($selecionado.Escopo)`n`n" +
         "O script de deteccao vai comparar a versao instalada com esta. Numa atualizacao futura, " +
         "basta repetir esse processo na maquina com a versao nova para regenerar a deteccao certa.",
         "Detectado com sucesso",
         'OK', 'Information'
     ) | Out-Null
+})
+
+$btnDetectFile.Add_Click({
+    if (-not $script:RemoteTestConnected -or -not $script:RemoteTestComputer) {
+        [System.Windows.Forms.MessageBox]::Show("Conecte primeiro na maquina teste (botao 'Conectar via SCCM / SYSTEM' acima).", "Aviso") | Out-Null
+        return
+    }
+
+    $sugestaoNome = if (-not [string]::IsNullOrWhiteSpace($txtAppName.Text)) {
+        "*" + ($txtAppName.Text -replace '\s', '') + "*.exe"
+    } else { "*.exe" }
+
+    $pattern = [Microsoft.VisualBasic.Interaction]::InputBox(
+        "Padrao do nome do arquivo executavel a procurar (aceita curinga *).`n`n" +
+        "A busca padrao cobre: Program Files, Program Files (x86) e ProgramData.`n" +
+        "Use isso quando o app NAO aparecer no registro (Detectar no Registro) nem nas " +
+        "pastas padrao - por exemplo instaladores que nao registram nada no Windows.",
+        "Buscar executavel na maquina teste",
+        $sugestaoNome
+    )
+    if ([string]::IsNullOrWhiteSpace($pattern)) { return }
+
+    $extraRoots = [Microsoft.VisualBasic.Interaction]::InputBox(
+        "Pastas adicionais para procurar tambem (opcional), separadas por ponto-e-virgula.`n" +
+        "Exemplo: D:\Apps;C:\CapTalk`n`n" +
+        "Deixe em branco para procurar so nas pastas padrao.",
+        "Pastas adicionais (opcional)",
+        ""
+    )
+
+    Write-Log "Procurando '$pattern' em $($script:RemoteTestComputer) (Program Files, Program Files (x86), ProgramData$(if ($extraRoots) { ' + pastas extras: ' + $extraRoots }))... isso pode demorar ate alguns minutos."
+    $btnDetectFile.Enabled = $false
+    $form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
+
+    $status = $null
+    $erro = $null
+    try {
+        $status = Invoke-CMSystemAction -ComputerName $script:RemoteTestComputer -Action FindExecutable -NamePattern $pattern -ExtraRoots $extraRoots -TimeoutSeconds 240
+    }
+    catch {
+        $erro = $_.Exception.Message
+    }
+    finally {
+        $form.Cursor = [System.Windows.Forms.Cursors]::Default
+        $btnDetectFile.Enabled = $true
+    }
+
+    if ($erro) {
+        Write-Log "Erro na busca por arquivo: $erro"
+        [System.Windows.Forms.MessageBox]::Show($erro, "Erro na busca por arquivo", 'OK', 'Error') | Out-Null
+        return
+    }
+
+    $raw = $status.ScriptOutput
+    if ([string]::IsNullOrWhiteSpace($raw)) {
+        Write-Log "Nenhum arquivo encontrado com o padrao '$pattern' nas pastas pesquisadas."
+        [System.Windows.Forms.MessageBox]::Show(
+            "Nenhum arquivo encontrado com o padrao '$pattern' em Program Files / Program Files (x86) / ProgramData" +
+            $(if ($extraRoots) { " nem em: $extraRoots" } else { "" }) + ".`n`n" +
+            "Tente um padrao mais amplo (ex: '*.exe' sem prefixo) ou informe uma pasta adicional onde o app foi instalado.",
+            "Nenhum resultado",
+            'OK', 'Warning'
+        ) | Out-Null
+        return
+    }
+
+    try {
+        $json = $raw | ConvertFrom-Json -ErrorAction Stop
+    }
+    catch {
+        Write-Log "Falha ao interpretar retorno da busca por arquivo: $($_.Exception.Message)"
+        [System.Windows.Forms.MessageBox]::Show("Resposta invalida da maquina teste.`n`n$raw", "Erro", 'OK', 'Error') | Out-Null
+        return
+    }
+
+    if ($json -isnot [System.Array]) { $json = @($json) }
+
+    if ($json.Count -eq 0) {
+        Write-Log "Nenhum arquivo encontrado com o padrao '$pattern'."
+        [System.Windows.Forms.MessageBox]::Show("Nenhum arquivo encontrado com o padrao '$pattern'.", "Aviso") | Out-Null
+        return
+    }
+
+    Write-Log "Encontrados $($json.Count) arquivo(s) com o padrao '$pattern'. Abrindo lista para selecao..."
+
+    # Reaproveita o mesmo picker usado para o registro, mapeando FullName/FileVersion/LastWriteTime
+    # nas mesmas 3 colunas (com titulos customizados para fazer sentido nesse contexto).
+    $itemsParaPicker = $json | ForEach-Object {
+        [PSCustomObject]@{
+            DisplayName    = $_.FullName
+            DisplayVersion = $_.FileVersion
+            Publisher      = $_.LastWriteTime
+        }
+    }
+
+    $selecionado = Show-InstalledSoftwarePicker -Items $itemsParaPicker -InitialFilter '' `
+        -WindowTitle "Selecione o executavel encontrado na maquina teste" `
+        -ColumnHeaders @("Caminho completo", "Versao do arquivo", "Modificado em")
+
+    if (-not $selecionado) {
+        Write-Log "Selecao de arquivo cancelada pelo usuario."
+        return
+    }
+
+    $script:DetectionMode     = 'File'
+    $script:DetectionFilePath = $selecionado.DisplayName  # aqui guardamos o FullName do arquivo
+
+    if (-not [string]::IsNullOrWhiteSpace($selecionado.DisplayVersion)) {
+        $txtVersion.Text = $selecionado.DisplayVersion
+    }
+
+    $lblDetectionMode.Text = "Modo de deteccao: ARQUIVO -> $($script:DetectionFilePath)"
+    $lblDetectionMode.ForeColor = 'DarkGoldenrod'
+
+    Write-Log "Deteccao por ARQUIVO selecionada: '$($script:DetectionFilePath)' (versao do arquivo: $($selecionado.DisplayVersion))"
+
+    [System.Windows.Forms.MessageBox]::Show(
+        "A deteccao vai usar a EXISTENCIA (e a versao do arquivo, se disponivel) deste executavel:`n`n" +
+        "$($script:DetectionFilePath)`n`n" +
+        "Isso substitui a deteccao por registro para esta aplicacao. Para voltar a usar o registro, " +
+        "clique em 'Voltar p/ Registro'.",
+        "Deteccao por arquivo selecionada",
+        'OK', 'Information'
+    ) | Out-Null
+})
+
+$btnClearFileDetection.Add_Click({
+    $script:DetectionMode = 'Registry'
+    $script:DetectionFilePath = $null
+    $lblDetectionMode.Text = "Modo de deteccao: Registro (DisplayName/Versao acima)."
+    $lblDetectionMode.ForeColor = 'Gray'
+    Write-Log "Modo de deteccao voltou para Registro (DisplayName/Versao)."
 })
 
 $btnTestInstall.Add_Click({
@@ -1404,7 +1692,23 @@ $btnTestInstall.Add_Click({
             Write-Log "  [SCCM/SYSTEM] $output"
         }
         else {
-            Write-Log "Executando instalacao de teste LOCALMENTE em: $($script:EffectiveSourcePath)"
+            $confirmLocal = [System.Windows.Forms.MessageBox]::Show(
+                "ATENCAO: nao ha nenhuma maquina teste conectada via SCCM (grupo 3).`n`n" +
+                "Isso vai executar '$($script:InstallInfo.Arquivo)' AQUI NESTE COMPUTADOR " +
+                "($env:COMPUTERNAME) - que pode ser o proprio servidor do SCCM ou a estacao onde " +
+                "voce esta rodando esta ferramenta.`n`n" +
+                "Tem certeza que quer instalar LOCALMENTE neste computador?",
+                "Confirmar execucao LOCAL (sem maquina teste conectada)",
+                [System.Windows.Forms.MessageBoxButtons]::YesNo,
+                [System.Windows.Forms.MessageBoxIcon]::Warning,
+                [System.Windows.Forms.MessageBoxDefaultButton]::Button2
+            )
+            if ($confirmLocal -ne 'Yes') {
+                Write-Log "Instalacao local cancelada pelo usuario (nenhuma maquina teste conectada)."
+                return
+            }
+
+            Write-Log "Executando instalacao de teste LOCALMENTE em: $($script:EffectiveSourcePath) (computador: $env:COMPUTERNAME)"
             Push-Location $script:EffectiveSourcePath
             if ($script:InstallInfo.Tipo -eq 'PowerShell') {
                 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\$($script:InstallInfo.Arquivo)"
@@ -1430,7 +1734,23 @@ $btnTestUninstall.Add_Click({
             Write-Log "  [SCCM/SYSTEM] $output"
         }
         else {
-            Write-Log "Executando desinstalacao de teste LOCALMENTE em: $($script:EffectiveSourcePath)"
+            $confirmLocal = [System.Windows.Forms.MessageBox]::Show(
+                "ATENCAO: nao ha nenhuma maquina teste conectada via SCCM (grupo 3).`n`n" +
+                "Isso vai executar '$($script:UninstallInfo.Arquivo)' AQUI NESTE COMPUTADOR " +
+                "($env:COMPUTERNAME) - que pode ser o proprio servidor do SCCM ou a estacao onde " +
+                "voce esta rodando esta ferramenta.`n`n" +
+                "Tem certeza que quer desinstalar LOCALMENTE neste computador?",
+                "Confirmar execucao LOCAL (sem maquina teste conectada)",
+                [System.Windows.Forms.MessageBoxButtons]::YesNo,
+                [System.Windows.Forms.MessageBoxIcon]::Warning,
+                [System.Windows.Forms.MessageBoxDefaultButton]::Button2
+            )
+            if ($confirmLocal -ne 'Yes') {
+                Write-Log "Desinstalacao local cancelada pelo usuario (nenhuma maquina teste conectada)."
+                return
+            }
+
+            Write-Log "Executando desinstalacao de teste LOCALMENTE em: $($script:EffectiveSourcePath) (computador: $env:COMPUTERNAME)"
             Push-Location $script:EffectiveSourcePath
             if ($script:UninstallInfo.Tipo -eq 'PowerShell') {
                 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\$($script:UninstallInfo.Arquivo)"
@@ -1444,13 +1764,35 @@ $btnTestUninstall.Add_Click({
     catch { Write-Log "Erro na desinstalacao de teste: $($_.Exception.Message)" }
 })
 
-$btnTestDetection.Add_Click({
-    if ([string]::IsNullOrWhiteSpace($txtDetectPattern.Text) -or [string]::IsNullOrWhiteSpace($txtVersion.Text)) {
-        [System.Windows.Forms.MessageBox]::Show("Preencha o padrao do DisplayName e a Versao.", "Aviso") | Out-Null
-        return
+function Build-CurrentDetectionText {
+    <#
+        Monta o texto do script de deteccao de acordo com o modo atual
+        ($script:DetectionMode): 'Registry' (DisplayName/Versao) ou
+        'File' (existencia/versao de um executavel especifico).
+        Retorna $null e mostra um aviso se faltar informacao.
+    #>
+    if ($script:DetectionMode -eq 'File' -and $script:DetectionFilePath) {
+        return New-FileDetectionScriptText -FilePath $script:DetectionFilePath -MinVersion $txtVersion.Text
     }
 
-    $script:DetectionText = New-DetectionScriptText -DisplayNamePattern $txtDetectPattern.Text -MinVersion $txtVersion.Text
+    if ([string]::IsNullOrWhiteSpace($txtDetectPattern.Text) -or [string]::IsNullOrWhiteSpace($txtVersion.Text)) {
+        [System.Windows.Forms.MessageBox]::Show("Preencha o padrao do DisplayName e a Versao (ou use 'Detectar por Arquivo/Executavel...').", "Aviso") | Out-Null
+        return $null
+    }
+
+    return New-DetectionScriptText -DisplayNamePattern $txtDetectPattern.Text -MinVersion $txtVersion.Text
+}
+
+$btnTestDetection.Add_Click({
+    $script:DetectionText = Build-CurrentDetectionText
+    if (-not $script:DetectionText) { return }
+
+    if ($script:DetectionMode -eq 'File') {
+        Write-Log "Testando deteccao por ARQUIVO: $($script:DetectionFilePath)"
+    } else {
+        Write-Log "Testando deteccao por REGISTRO: DisplayName like '*$($txtDetectPattern.Text)*', versao minima $($txtVersion.Text)"
+    }
+
     try {
         if ($script:RemoteTestConnected -and $script:RemoteTestComputer) {
             Write-Log "Executando script de deteccao em $($script:RemoteTestComputer) via SCCM como SYSTEM..."
@@ -1463,7 +1805,7 @@ $btnTestDetection.Add_Click({
             } catch {}
         }
         else {
-            Write-Log "Executando script de deteccao LOCALMENTE..."
+            Write-Log "Sem maquina teste conectada via SCCM - executando script de deteccao LOCALMENTE neste computador ($env:COMPUTERNAME)."
             $resultado = Invoke-Expression $script:DetectionText
         }
 
@@ -1490,10 +1832,19 @@ $btnCreate.Add_Click({
         return
     }
 
-    $script:DetectionText = New-DetectionScriptText -DisplayNamePattern $txtDetectPattern.Text -MinVersion $txtVersion.Text
+    $script:DetectionText = Build-CurrentDetectionText
+    if (-not $script:DetectionText) { return }
+
+    $descricaoDeteccao = if ($script:DetectionMode -eq 'File') {
+        "Arquivo: $($script:DetectionFilePath)"
+    } else {
+        "Registro: DisplayName like '*$($txtDetectPattern.Text)*', versao minima $($txtVersion.Text)"
+    }
 
     $confirm = [System.Windows.Forms.MessageBox]::Show(
-        "Confirma a criacao da aplicacao '$($txtAppName.Text)' no SCCM?`n`nContent Location (UNC real usado pelo SCCM):`n$($script:OriginalSourcePath)",
+        "Confirma a criacao da aplicacao '$($txtAppName.Text)' no SCCM?`n`n" +
+        "Content Location (UNC real usado pelo SCCM):`n$($script:OriginalSourcePath)`n`n" +
+        "Metodo de deteccao: $descricaoDeteccao",
         "Confirmar",
         [System.Windows.Forms.MessageBoxButtons]::YesNo
     )
