@@ -743,11 +743,13 @@ function Wait-CMScriptResult {
         [Parameter(Mandatory)][uint32]$OperationID,
         [Parameter(Mandatory)][string]$SiteServer,
         [Parameter(Mandatory)][string]$SiteCode,
-        [int]$TimeoutSeconds = 90
+        [int]$TimeoutSeconds = 90,
+        [switch]$RequireScriptOutput
     )
 
     $namespace = "root\SMS\site_$SiteCode"
     $elapsed = 0
+    $sawStatus = $false
 
     do {
         try {
@@ -760,16 +762,23 @@ function Wait-CMScriptResult {
         }
 
         if ($status) {
-            # SMS_ScriptsExecutionStatus pode aparecer antes de ScriptOutput ser
-            # preenchido. Isso acontece principalmente em acoes mais demoradas
-            # como InventoryInstalledSoftware. Nao retornar prematuramente.
-            $scriptOutput = [string]$status.ScriptOutput
-            $scriptError  = [string]$status.ScriptError
-
+            $sawStatus = $true
+            $scriptError = [string]$status.ScriptError
             if (-not [string]::IsNullOrWhiteSpace($scriptError)) {
                 throw "Run Script retornou erro na maquina: $scriptError"
             }
 
+            # Para o teste de CONEXAO nao precisamos de payload. O simples
+            # aparecimento do status desta OperationID prova que o cliente
+            # recebeu/processou o Run Script via SCCM. Exigir ScriptOutput aqui
+            # foi a regressao introduzida na SOURCEFIX2.
+            if (-not $RequireScriptOutput) {
+                return $status
+            }
+
+            # Acoes que realmente devolvem dados (inventario/deteccao) continuam
+            # aguardando o payload ser gravado pelo SCCM.
+            $scriptOutput = [string]$status.ScriptOutput
             if (-not [string]::IsNullOrWhiteSpace($scriptOutput)) {
                 return $status
             }
@@ -780,7 +789,11 @@ function Wait-CMScriptResult {
         [System.Windows.Forms.Application]::DoEvents()
     } while ($elapsed -lt $TimeoutSeconds)
 
-    throw "Timeout aguardando o ScriptOutput da maquina pelo SCCM apos $TimeoutSeconds segundos. O cliente respondeu, mas o resultado do Run Script nao foi concluido/preenchido. Verifique Scripts.log/CcmMessaging.log."
+    if ($RequireScriptOutput -and $sawStatus) {
+        throw "Timeout aguardando o ScriptOutput da maquina pelo SCCM apos $TimeoutSeconds segundos. O cliente respondeu ao Run Script, mas o payload ainda nao foi disponibilizado pelo SMS Provider."
+    }
+
+    throw "Timeout aguardando retorno da maquina pelo SCCM apos $TimeoutSeconds segundos. Verifique se o cliente esta online e os logs Scripts.log/CcmMessaging.log."
 }
 
 function Invoke-CMSystemAction {
@@ -845,7 +858,13 @@ function Invoke-CMSystemAction {
         throw 'O SCCM nao retornou OperationID para a execucao do Run Script.'
     }
 
-    return Wait-CMScriptResult -OperationID ([uint32]$invoke.OperationID) -SiteServer $script:SiteServer -SiteCode $script:SiteCode -TimeoutSeconds $TimeoutSeconds
+    # Ping e apenas validacao de conectividade logica pelo SCCM: nao exija
+    # ScriptOutput. As demais acoes dependem do payload retornado.
+    if ($Action -eq 'Ping') {
+        return Wait-CMScriptResult -OperationID ([uint32]$invoke.OperationID) -SiteServer $script:SiteServer -SiteCode $script:SiteCode -TimeoutSeconds $TimeoutSeconds
+    }
+
+    return Wait-CMScriptResult -OperationID ([uint32]$invoke.OperationID) -SiteServer $script:SiteServer -SiteCode $script:SiteCode -TimeoutSeconds $TimeoutSeconds -RequireScriptOutput
 }
 
 function Connect-RemoteTestMachine {
@@ -866,7 +885,7 @@ function Connect-RemoteTestMachine {
 
         return [PSCustomObject]@{
             Sucesso  = $true
-            Mensagem = if ($identity) { "Maquina respondeu pelo SCCM. Contexto remoto: $identity" } else { "Maquina respondeu pelo SCCM Run Script." }
+            Mensagem = if ($identity) { "Maquina respondeu pelo SCCM. Contexto remoto: $identity" } else { "Maquina respondeu ao Run Script do SCCM. Conexao logica validada." }
             Output   = $output
         }
     }
@@ -1123,7 +1142,7 @@ $script:OriginalSourcePath  = $null # caminho UNC real, sempre usado no -Content
 $script:DetectionMode     = 'Registry'  # 'Registry' ou 'File'
 $script:DetectionFilePath = $null       # caminho do executavel, quando DetectionMode = 'File'
 $script:DetectedRegistryApp = $null      # entrada real descoberta automaticamente na maquina teste
-$script:BuildId = '2026.08.26-REBUILT-STABLE-SOURCEFIX2'
+$script:BuildId = '2026.08.26-REBUILT-STABLE-SOURCEFIX3'
 
 # ----------------------------------------------------------------------------
 # GUI
