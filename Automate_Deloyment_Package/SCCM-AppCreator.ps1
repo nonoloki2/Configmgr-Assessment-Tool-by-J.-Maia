@@ -259,7 +259,7 @@ $script:TestSession   = $null
 # ----------------------------------------------------------------------------
 $form                  = New-Object System.Windows.Forms.Form
 $form.Text             = "SCCM App Creator - Aplicacoes baseadas em Script"
-$form.Size             = New-Object System.Drawing.Size(720, 780)
+$form.Size             = New-Object System.Drawing.Size(720, 810)
 $form.StartPosition    = "CenterScreen"
 $form.FormBorderStyle  = 'FixedDialog'
 $form.MaximizeBox      = $false
@@ -310,7 +310,7 @@ $grpConn.Controls.Add($lblConnStatus)
 $grpApp = New-Object System.Windows.Forms.GroupBox
 $grpApp.Text = "2. Dados da Aplicacao"
 $grpApp.Location = New-Object System.Drawing.Point(10, 110)
-$grpApp.Size = New-Object System.Drawing.Size(690, 175)
+$grpApp.Size = New-Object System.Drawing.Size(690, 200)
 $form.Controls.Add($grpApp)
 
 $lblAppName = New-Object System.Windows.Forms.Label
@@ -365,31 +365,38 @@ $grpApp.Controls.Add($lblSourceFolder)
 
 $txtSourceFolder = New-Object System.Windows.Forms.TextBox
 $txtSourceFolder.Location = New-Object System.Drawing.Point(140, 112)
-$txtSourceFolder.Size = New-Object System.Drawing.Size(400, 20)
+$txtSourceFolder.Size = New-Object System.Drawing.Size(540, 20)
+$txtSourceFolder.ShortcutsEnabled = $true
 $grpApp.Controls.Add($txtSourceFolder)
 
+$btnPasteFolder = New-Object System.Windows.Forms.Button
+$btnPasteFolder.Text = "Colar"
+$btnPasteFolder.Location = New-Object System.Drawing.Point(140, 138)
+$btnPasteFolder.Size = New-Object System.Drawing.Size(60, 23)
+$grpApp.Controls.Add($btnPasteFolder)
+
 $btnBrowse = New-Object System.Windows.Forms.Button
-$btnBrowse.Text = "..."
-$btnBrowse.Location = New-Object System.Drawing.Point(545, 111)
-$btnBrowse.Size = New-Object System.Drawing.Size(35, 23)
+$btnBrowse.Text = "Procurar..."
+$btnBrowse.Location = New-Object System.Drawing.Point(205, 138)
+$btnBrowse.Size = New-Object System.Drawing.Size(80, 23)
 $grpApp.Controls.Add($btnBrowse)
 
 $btnScan = New-Object System.Windows.Forms.Button
 $btnScan.Text = "Escanear Pasta"
-$btnScan.Location = New-Object System.Drawing.Point(590, 111)
-$btnScan.Size = New-Object System.Drawing.Size(90, 23)
+$btnScan.Location = New-Object System.Drawing.Point(290, 138)
+$btnScan.Size = New-Object System.Drawing.Size(100, 23)
 $grpApp.Controls.Add($btnScan)
 
 $lblScanResult = New-Object System.Windows.Forms.Label
 $lblScanResult.Text = "Instalacao: -- | Desinstalacao: --"
-$lblScanResult.Location = New-Object System.Drawing.Point(10, 145)
+$lblScanResult.Location = New-Object System.Drawing.Point(10, 165)
 $lblScanResult.Size = New-Object System.Drawing.Size(670, 20)
 $grpApp.Controls.Add($lblScanResult)
 
 # --- Grupo: Maquina de Teste Remota (CyberArk / conta de servico sem acesso a maquina teste) ---
 $grpRemote = New-Object System.Windows.Forms.GroupBox
 $grpRemote.Text = "3. Maquina de Teste (Remota - opcional, use quando o script roda no servidor)"
-$grpRemote.Location = New-Object System.Drawing.Point(10, 295)
+$grpRemote.Location = New-Object System.Drawing.Point(10, 320)
 $grpRemote.Size = New-Object System.Drawing.Size(690, 70)
 $form.Controls.Add($grpRemote)
 
@@ -426,7 +433,7 @@ $grpRemote.Controls.Add($lblRemoteStatus)
 # --- Grupo: Comandos gerados ---
 $grpCmds = New-Object System.Windows.Forms.GroupBox
 $grpCmds.Text = "4. Linhas geradas (SCCM Deployment Type)"
-$grpCmds.Location = New-Object System.Drawing.Point(10, 375)
+$grpCmds.Location = New-Object System.Drawing.Point(10, 400)
 $grpCmds.Size = New-Object System.Drawing.Size(690, 130)
 $form.Controls.Add($grpCmds)
 
@@ -457,7 +464,7 @@ $grpCmds.Controls.Add($txtUninstallCmd)
 # --- Grupo: Testes (local ou remoto, dependendo da sessao) ---
 $grpTest = New-Object System.Windows.Forms.GroupBox
 $grpTest.Text = "5. Testes (local por padrao, ou na maquina remota se conectada acima)"
-$grpTest.Location = New-Object System.Drawing.Point(10, 515)
+$grpTest.Location = New-Object System.Drawing.Point(10, 540)
 $grpTest.Size = New-Object System.Drawing.Size(690, 60)
 $form.Controls.Add($grpTest)
 
@@ -488,7 +495,7 @@ $grpTest.Controls.Add($btnCreate)
 
 # --- Log ---
 $txtLog = New-Object System.Windows.Forms.TextBox
-$txtLog.Location = New-Object System.Drawing.Point(10, 585)
+$txtLog.Location = New-Object System.Drawing.Point(10, 610)
 $txtLog.Size = New-Object System.Drawing.Size(690, 160)
 $txtLog.Multiline = $true
 $txtLog.ScrollBars = 'Vertical'
@@ -523,10 +530,44 @@ $btnConnect.Add_Click({
     Write-Log $result.Mensagem
 })
 
+$btnPasteFolder.Add_Click({
+    try {
+        if ([System.Windows.Forms.Clipboard]::ContainsText()) {
+            $texto = [System.Windows.Forms.Clipboard]::GetText().Trim()
+            $txtSourceFolder.Text = $texto
+        }
+        else {
+            [System.Windows.Forms.MessageBox]::Show("A area de transferencia nao contem texto.", "Aviso") | Out-Null
+        }
+    }
+    catch {
+        [System.Windows.Forms.MessageBox]::Show(
+            "Nao foi possivel ler a area de transferencia. Isso costuma acontecer quando o script esta rodando como Administrador " +
+            "e o texto foi copiado por um programa sem elevacao (bloqueio de UIPI do Windows).`n`n" +
+            "Solucao: rode o script SEM 'Executar como Administrador' (a conexao ao SCCM nao exige elevacao), " +
+            "ou digite o caminho manualmente no campo.",
+            "Erro ao colar",
+            'OK', 'Warning'
+        ) | Out-Null
+    }
+})
+
 $btnBrowse.Add_Click({
-    $dlg = New-Object System.Windows.Forms.FolderBrowserDialog
+    # FolderBrowserDialog classico nao permite digitar/colar caminhos UNC (\\servidor\pasta).
+    # Truque: usar OpenFileDialog (que tem barra de endereco completa e aceita UNC) para
+    # navegar/digitar ate a pasta desejada e depois pegar so o diretorio.
+    $dlg = New-Object System.Windows.Forms.OpenFileDialog
+    $dlg.Title = "Navegue ate a pasta de origem (ou cole/digite o caminho UNC na barra 'Nome do arquivo') e clique Abrir"
+    $dlg.CheckFileExists = $false
+    $dlg.CheckPathExists = $true
+    $dlg.ValidateNames = $false
+    $dlg.Multiselect = $false
+    $dlg.FileName = "Selecione esta pasta"
+    $dlg.Filter = "Pastas|*.pasta"
+
     if ($dlg.ShowDialog() -eq 'OK') {
-        $txtSourceFolder.Text = $dlg.SelectedPath
+        $pasta = Split-Path $dlg.FileName -Parent
+        $txtSourceFolder.Text = $pasta
     }
 })
 
