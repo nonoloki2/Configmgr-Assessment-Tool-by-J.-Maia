@@ -141,6 +141,77 @@ function Connect-ToSCCM {
     }
 }
 
+function Connect-RemoteTestMachine {
+    <#
+        Cria uma sessao PowerShell Remoting (WinRM) com a maquina teste.
+        Necessario quando o script roda no servidor SCCM (via CyberArk) e
+        a conta de servico nao tem/nao pode ter acesso a maquina teste -
+        nesse caso o teste e feito com as SUAS credenciais, via sessao remota.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$ComputerName,
+        [Parameter(Mandatory)][System.Management.Automation.PSCredential]$Credential
+    )
+
+    try {
+        if (-not (Test-WSMan -ComputerName $ComputerName -Credential $Credential -Authentication Default -ErrorAction Stop)) {
+            throw "WinRM nao respondeu em $ComputerName."
+        }
+
+        $session = New-PSSession -ComputerName $ComputerName -Credential $Credential -ErrorAction Stop
+        return [PSCustomObject]@{ Sucesso = $true; Sessao = $session; Mensagem = "Sessao remota aberta com $ComputerName." }
+    }
+    catch {
+        return [PSCustomObject]@{ Sucesso = $false; Sessao = $null; Mensagem = $_.Exception.Message }
+    }
+}
+
+function Invoke-RemoteScriptAction {
+    <#
+        Copia a pasta de origem para a maquina teste (evita problema de
+        "double hop" do Kerberos) e executa o install/uninstall LOCALMENTE
+        na maquina remota, via sessao ja aberta.
+    #>
+    param(
+        [Parameter(Mandatory)][System.Management.Automation.Runspaces.PSSession]$Session,
+        [Parameter(Mandatory)][string]$SourceFolder,
+        [Parameter(Mandatory)][PSCustomObject]$ScriptInfo
+    )
+
+    $remoteBase   = "C:\Windows\Temp\SCCMAppTest"
+    $folderName   = Split-Path $SourceFolder -Leaf
+    $remoteFolder = Join-Path $remoteBase $folderName
+
+    Invoke-Command -Session $Session -ScriptBlock {
+        param($base)
+        if (-not (Test-Path $base)) { New-Item -Path $base -ItemType Directory -Force | Out-Null }
+    } -ArgumentList $remoteBase
+
+    Copy-Item -Path $SourceFolder -Destination $remoteBase -ToSession $Session -Recurse -Force
+
+    $output = Invoke-Command -Session $Session -ScriptBlock {
+        param($path, $tipo, $arquivo)
+        Set-Location $path
+        if ($tipo -eq 'PowerShell') {
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\$arquivo" 2>&1
+        } else {
+            & cmd.exe /c ".\$arquivo" 2>&1
+        }
+    } -ArgumentList $remoteFolder, $ScriptInfo.Tipo, $ScriptInfo.Arquivo
+
+    return $output
+}
+
+function Invoke-RemoteDetection {
+    param(
+        [Parameter(Mandatory)][System.Management.Automation.Runspaces.PSSession]$Session,
+        [Parameter(Mandatory)][string]$DetectionScriptText
+    )
+
+    $scriptBlock = [ScriptBlock]::Create($DetectionScriptText)
+    return Invoke-Command -Session $Session -ScriptBlock $scriptBlock
+}
+
 function New-SCCMScriptApplication {
     param(
         [Parameter(Mandatory)][string]$AppName,
@@ -181,13 +252,14 @@ function New-SCCMScriptApplication {
 $script:InstallInfo   = $null
 $script:UninstallInfo = $null
 $script:DetectionText = $null
+$script:TestSession   = $null
 
 # ----------------------------------------------------------------------------
 # GUI
 # ----------------------------------------------------------------------------
 $form                  = New-Object System.Windows.Forms.Form
 $form.Text             = "SCCM App Creator - Aplicacoes baseadas em Script"
-$form.Size             = New-Object System.Drawing.Size(720, 700)
+$form.Size             = New-Object System.Drawing.Size(720, 780)
 $form.StartPosition    = "CenterScreen"
 $form.FormBorderStyle  = 'FixedDialog'
 $form.MaximizeBox      = $false
@@ -314,10 +386,47 @@ $lblScanResult.Location = New-Object System.Drawing.Point(10, 145)
 $lblScanResult.Size = New-Object System.Drawing.Size(670, 20)
 $grpApp.Controls.Add($lblScanResult)
 
+# --- Grupo: Maquina de Teste Remota (CyberArk / conta de servico sem acesso a maquina teste) ---
+$grpRemote = New-Object System.Windows.Forms.GroupBox
+$grpRemote.Text = "3. Maquina de Teste (Remota - opcional, use quando o script roda no servidor)"
+$grpRemote.Location = New-Object System.Drawing.Point(10, 295)
+$grpRemote.Size = New-Object System.Drawing.Size(690, 70)
+$form.Controls.Add($grpRemote)
+
+$lblTestMachine = New-Object System.Windows.Forms.Label
+$lblTestMachine.Text = "Nome/IP da maquina teste:"
+$lblTestMachine.Location = New-Object System.Drawing.Point(10, 25)
+$lblTestMachine.Size = New-Object System.Drawing.Size(150, 20)
+$grpRemote.Controls.Add($lblTestMachine)
+
+$txtTestMachine = New-Object System.Windows.Forms.TextBox
+$txtTestMachine.Location = New-Object System.Drawing.Point(165, 22)
+$txtTestMachine.Size = New-Object System.Drawing.Size(200, 20)
+$grpRemote.Controls.Add($txtTestMachine)
+
+$btnConnectRemote = New-Object System.Windows.Forms.Button
+$btnConnectRemote.Text = "Conectar (pede credencial)"
+$btnConnectRemote.Location = New-Object System.Drawing.Point(375, 21)
+$btnConnectRemote.Size = New-Object System.Drawing.Size(170, 23)
+$grpRemote.Controls.Add($btnConnectRemote)
+
+$btnDisconnectRemote = New-Object System.Windows.Forms.Button
+$btnDisconnectRemote.Text = "Desconectar"
+$btnDisconnectRemote.Location = New-Object System.Drawing.Point(555, 21)
+$btnDisconnectRemote.Size = New-Object System.Drawing.Size(125, 23)
+$grpRemote.Controls.Add($btnDisconnectRemote)
+
+$lblRemoteStatus = New-Object System.Windows.Forms.Label
+$lblRemoteStatus.Text = "Sem sessao remota (testes rodarao localmente, na maquina atual)."
+$lblRemoteStatus.ForeColor = 'Gray'
+$lblRemoteStatus.Location = New-Object System.Drawing.Point(10, 48)
+$lblRemoteStatus.Size = New-Object System.Drawing.Size(670, 18)
+$grpRemote.Controls.Add($lblRemoteStatus)
+
 # --- Grupo: Comandos gerados ---
 $grpCmds = New-Object System.Windows.Forms.GroupBox
-$grpCmds.Text = "3. Linhas geradas (SCCM Deployment Type)"
-$grpCmds.Location = New-Object System.Drawing.Point(10, 295)
+$grpCmds.Text = "4. Linhas geradas (SCCM Deployment Type)"
+$grpCmds.Location = New-Object System.Drawing.Point(10, 375)
 $grpCmds.Size = New-Object System.Drawing.Size(690, 130)
 $form.Controls.Add($grpCmds)
 
@@ -345,10 +454,10 @@ $txtUninstallCmd.Size = New-Object System.Drawing.Size(670, 20)
 $txtUninstallCmd.ReadOnly = $true
 $grpCmds.Controls.Add($txtUninstallCmd)
 
-# --- Grupo: Testes locais (na maquina teste) ---
+# --- Grupo: Testes (local ou remoto, dependendo da sessao) ---
 $grpTest = New-Object System.Windows.Forms.GroupBox
-$grpTest.Text = "4. Testes locais (opcional - roda na maquina atual)"
-$grpTest.Location = New-Object System.Drawing.Point(10, 435)
+$grpTest.Text = "5. Testes (local por padrao, ou na maquina remota se conectada acima)"
+$grpTest.Location = New-Object System.Drawing.Point(10, 515)
 $grpTest.Size = New-Object System.Drawing.Size(690, 60)
 $form.Controls.Add($grpTest)
 
@@ -379,8 +488,8 @@ $grpTest.Controls.Add($btnCreate)
 
 # --- Log ---
 $txtLog = New-Object System.Windows.Forms.TextBox
-$txtLog.Location = New-Object System.Drawing.Point(10, 505)
-$txtLog.Size = New-Object System.Drawing.Size(690, 140)
+$txtLog.Location = New-Object System.Drawing.Point(10, 585)
+$txtLog.Size = New-Object System.Drawing.Size(690, 160)
 $txtLog.Multiline = $true
 $txtLog.ScrollBars = 'Vertical'
 $txtLog.ReadOnly = $true
@@ -448,23 +557,64 @@ $btnScan.Add_Click({
     }
 })
 
+$btnConnectRemote.Add_Click({
+    if ([string]::IsNullOrWhiteSpace($txtTestMachine.Text)) {
+        [System.Windows.Forms.MessageBox]::Show("Informe o nome ou IP da maquina teste.", "Aviso") | Out-Null
+        return
+    }
+
+    $cred = Get-Credential -Message "Credenciais com acesso a $($txtTestMachine.Text)"
+    if (-not $cred) { return }
+
+    Write-Log "Conectando na maquina teste $($txtTestMachine.Text) via WinRM..."
+    $result = Connect-RemoteTestMachine -ComputerName $txtTestMachine.Text -Credential $cred
+
+    if ($result.Sucesso) {
+        $script:TestSession = $result.Sessao
+        $lblRemoteStatus.Text = "Conectado a $($txtTestMachine.Text). Os testes abaixo rodarao NESSA maquina remota."
+        $lblRemoteStatus.ForeColor = 'Green'
+    } else {
+        $script:TestSession = $null
+        $lblRemoteStatus.Text = "Falha ao conectar: $($result.Mensagem)"
+        $lblRemoteStatus.ForeColor = 'Red'
+    }
+    Write-Log $result.Mensagem
+})
+
+$btnDisconnectRemote.Add_Click({
+    if ($script:TestSession) {
+        Remove-PSSession -Session $script:TestSession -ErrorAction SilentlyContinue
+        $script:TestSession = $null
+        $lblRemoteStatus.Text = "Sem sessao remota (testes rodarao localmente, na maquina atual)."
+        $lblRemoteStatus.ForeColor = 'Gray'
+        Write-Log "Sessao remota encerrada."
+    }
+})
+
 $btnTestInstall.Add_Click({
     if (-not $script:InstallInfo -or -not $script:InstallInfo.Encontrado) {
         [System.Windows.Forms.MessageBox]::Show("Escaneie a pasta primeiro.", "Aviso") | Out-Null
         return
     }
-    Write-Log "Executando instalacao de teste em: $($txtSourceFolder.Text)"
     try {
-        Push-Location $txtSourceFolder.Text
-        if ($script:InstallInfo.Tipo -eq 'PowerShell') {
-            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\$($script:InstallInfo.Arquivo)"
-        } else {
-            & cmd.exe /c ".\$($script:InstallInfo.Arquivo)"
+        if ($script:TestSession -and $script:TestSession.State -eq 'Opened') {
+            Write-Log "Executando instalacao de teste REMOTAMENTE em $($txtTestMachine.Text)..."
+            $output = Invoke-RemoteScriptAction -Session $script:TestSession -SourceFolder $txtSourceFolder.Text -ScriptInfo $script:InstallInfo
+            $output | ForEach-Object { Write-Log "  [remoto] $_" }
+        }
+        else {
+            Write-Log "Executando instalacao de teste LOCALMENTE em: $($txtSourceFolder.Text)"
+            Push-Location $txtSourceFolder.Text
+            if ($script:InstallInfo.Tipo -eq 'PowerShell') {
+                & powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\$($script:InstallInfo.Arquivo)"
+            } else {
+                & cmd.exe /c ".\$($script:InstallInfo.Arquivo)"
+            }
+            Pop-Location
         }
         Write-Log "Instalacao de teste finalizada (verifique o resultado na maquina)."
     }
     catch { Write-Log "Erro na instalacao de teste: $($_.Exception.Message)" }
-    finally { Pop-Location }
 })
 
 $btnTestUninstall.Add_Click({
@@ -472,18 +622,25 @@ $btnTestUninstall.Add_Click({
         [System.Windows.Forms.MessageBox]::Show("Escaneie a pasta primeiro.", "Aviso") | Out-Null
         return
     }
-    Write-Log "Executando desinstalacao de teste em: $($txtSourceFolder.Text)"
     try {
-        Push-Location $txtSourceFolder.Text
-        if ($script:UninstallInfo.Tipo -eq 'PowerShell') {
-            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\$($script:UninstallInfo.Arquivo)"
-        } else {
-            & cmd.exe /c ".\$($script:UninstallInfo.Arquivo)"
+        if ($script:TestSession -and $script:TestSession.State -eq 'Opened') {
+            Write-Log "Executando desinstalacao de teste REMOTAMENTE em $($txtTestMachine.Text)..."
+            $output = Invoke-RemoteScriptAction -Session $script:TestSession -SourceFolder $txtSourceFolder.Text -ScriptInfo $script:UninstallInfo
+            $output | ForEach-Object { Write-Log "  [remoto] $_" }
+        }
+        else {
+            Write-Log "Executando desinstalacao de teste LOCALMENTE em: $($txtSourceFolder.Text)"
+            Push-Location $txtSourceFolder.Text
+            if ($script:UninstallInfo.Tipo -eq 'PowerShell') {
+                & powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\$($script:UninstallInfo.Arquivo)"
+            } else {
+                & cmd.exe /c ".\$($script:UninstallInfo.Arquivo)"
+            }
+            Pop-Location
         }
         Write-Log "Desinstalacao de teste finalizada (verifique o resultado na maquina)."
     }
     catch { Write-Log "Erro na desinstalacao de teste: $($_.Exception.Message)" }
-    finally { Pop-Location }
 })
 
 $btnTestDetection.Add_Click({
@@ -492,9 +649,16 @@ $btnTestDetection.Add_Click({
         return
     }
     $script:DetectionText = New-DetectionScriptText -DisplayNamePattern $txtDetectPattern.Text -MinVersion $txtVersion.Text
-    Write-Log "Executando script de deteccao localmente..."
     try {
-        $resultado = Invoke-Expression $script:DetectionText
+        if ($script:TestSession -and $script:TestSession.State -eq 'Opened') {
+            Write-Log "Executando script de deteccao REMOTAMENTE em $($txtTestMachine.Text)..."
+            $resultado = Invoke-RemoteDetection -Session $script:TestSession -DetectionScriptText $script:DetectionText
+        }
+        else {
+            Write-Log "Executando script de deteccao LOCALMENTE..."
+            $resultado = Invoke-Expression $script:DetectionText
+        }
+
         if ($resultado -eq "Instalado") {
             Write-Log "RESULTADO: Instalado (deteccao OK)"
         } else {
@@ -541,6 +705,12 @@ $btnCreate.Add_Click({
     } else {
         Write-Log "ERRO: $($result.Mensagem)"
         [System.Windows.Forms.MessageBox]::Show($result.Mensagem, "Erro", 'OK', 'Error') | Out-Null
+    }
+})
+
+$form.Add_FormClosing({
+    if ($script:TestSession) {
+        Remove-PSSession -Session $script:TestSession -ErrorAction SilentlyContinue
     }
 })
 
