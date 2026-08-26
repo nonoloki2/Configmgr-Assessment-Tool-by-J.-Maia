@@ -52,6 +52,52 @@ function Get-CleanPath {
     return $clean
 }
 
+function Resolve-SourceAccess {
+    <#
+        Garante acesso de LEITURA a pasta de origem para fins de escaneamento/teste.
+
+        Se $Credential for informado, mapeia um PSDrive temporario usando essa
+        credencial (util quando o script roda com uma conta de servico/SCCM
+        que nao tem permissao no share de arquivos, mas o usuario tem).
+
+        Retorna um objeto com:
+          Sucesso           - bool
+          CaminhoEfetivo    - caminho a usar para Test-Path/Get-ChildItem/Copy-Item
+          Mensagem          - detalhe do erro, se houver
+
+        O caminho original (UNC real) deve ser guardado a parte para uso no
+        -ContentLocation do SCCM, que nao deve usar o drive temporario.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [System.Management.Automation.PSCredential]$Credential
+    )
+
+    # Remove mapeamento anterior, se existir, para evitar conflito de nome
+    if (Get-PSDrive -Name 'SCCMSRC' -ErrorAction SilentlyContinue) {
+        Remove-PSDrive -Name 'SCCMSRC' -Force -ErrorAction SilentlyContinue
+    }
+
+    if ($Credential) {
+        try {
+            New-PSDrive -Name 'SCCMSRC' -PSProvider FileSystem -Root $Path -Credential $Credential -Scope Global -ErrorAction Stop | Out-Null
+            return [PSCustomObject]@{ Sucesso = $true; CaminhoEfetivo = 'SCCMSRC:\'; Mensagem = "Acesso via credencial alternativa OK." }
+        }
+        catch {
+            return [PSCustomObject]@{ Sucesso = $false; CaminhoEfetivo = $null; Mensagem = $_.Exception.Message }
+        }
+    }
+    else {
+        if (Test-Path -LiteralPath $Path) {
+            return [PSCustomObject]@{ Sucesso = $true; CaminhoEfetivo = $Path; Mensagem = "Acesso com a conta atual OK." }
+        }
+        else {
+            return [PSCustomObject]@{ Sucesso = $false; CaminhoEfetivo = $null; Mensagem = "Test-Path retornou falso (sem detalhe de erro adicional)." }
+        }
+    }
+}
+
+
 function Get-InstallCommandLine {
     <#
         Verifica na pasta de origem se existe install.ps1/uninstall.ps1 ou
@@ -274,13 +320,17 @@ $script:InstallInfo   = $null
 $script:UninstallInfo = $null
 $script:DetectionText = $null
 $script:TestSession   = $null
+$script:SourceCredential  = $null
+$script:SourceMappedDrive = $null   # nome do PSDrive temporario, se usado
+$script:EffectiveSourcePath = $null # caminho usado de fato para ler arquivos (UNC ou drive mapeado)
+$script:OriginalSourcePath  = $null # caminho UNC real, sempre usado no -ContentLocation do SCCM
 
 # ----------------------------------------------------------------------------
 # GUI
 # ----------------------------------------------------------------------------
 $form                  = New-Object System.Windows.Forms.Form
 $form.Text             = "SCCM App Creator - Aplicacoes baseadas em Script"
-$form.Size             = New-Object System.Drawing.Size(720, 810)
+$form.Size             = New-Object System.Drawing.Size(720, 835)
 $form.StartPosition    = "CenterScreen"
 $form.FormBorderStyle  = 'FixedDialog'
 $form.MaximizeBox      = $false
@@ -331,7 +381,7 @@ $grpConn.Controls.Add($lblConnStatus)
 $grpApp = New-Object System.Windows.Forms.GroupBox
 $grpApp.Text = "2. Dados da Aplicacao"
 $grpApp.Location = New-Object System.Drawing.Point(10, 110)
-$grpApp.Size = New-Object System.Drawing.Size(690, 200)
+$grpApp.Size = New-Object System.Drawing.Size(690, 225)
 $form.Controls.Add($grpApp)
 
 $lblAppName = New-Object System.Windows.Forms.Label
@@ -408,16 +458,35 @@ $btnScan.Location = New-Object System.Drawing.Point(290, 138)
 $btnScan.Size = New-Object System.Drawing.Size(100, 23)
 $grpApp.Controls.Add($btnScan)
 
+$btnSourceCred = New-Object System.Windows.Forms.Button
+$btnSourceCred.Text = "Credenciais p/ Acessar Pasta..."
+$btnSourceCred.Location = New-Object System.Drawing.Point(400, 138)
+$btnSourceCred.Size = New-Object System.Drawing.Size(180, 23)
+$grpApp.Controls.Add($btnSourceCred)
+
+$btnClearSourceCred = New-Object System.Windows.Forms.Button
+$btnClearSourceCred.Text = "Limpar"
+$btnClearSourceCred.Location = New-Object System.Drawing.Point(585, 138)
+$btnClearSourceCred.Size = New-Object System.Drawing.Size(55, 23)
+$grpApp.Controls.Add($btnClearSourceCred)
+
+$lblSourceCredStatus = New-Object System.Windows.Forms.Label
+$lblSourceCredStatus.Text = "Acesso a pasta: usando a conta atual do script."
+$lblSourceCredStatus.ForeColor = 'Gray'
+$lblSourceCredStatus.Location = New-Object System.Drawing.Point(10, 165)
+$lblSourceCredStatus.Size = New-Object System.Drawing.Size(670, 18)
+$grpApp.Controls.Add($lblSourceCredStatus)
+
 $lblScanResult = New-Object System.Windows.Forms.Label
 $lblScanResult.Text = "Instalacao: -- | Desinstalacao: --"
-$lblScanResult.Location = New-Object System.Drawing.Point(10, 165)
+$lblScanResult.Location = New-Object System.Drawing.Point(10, 183)
 $lblScanResult.Size = New-Object System.Drawing.Size(670, 20)
 $grpApp.Controls.Add($lblScanResult)
 
 # --- Grupo: Maquina de Teste Remota (CyberArk / conta de servico sem acesso a maquina teste) ---
 $grpRemote = New-Object System.Windows.Forms.GroupBox
 $grpRemote.Text = "3. Maquina de Teste (Remota - opcional, use quando o script roda no servidor)"
-$grpRemote.Location = New-Object System.Drawing.Point(10, 320)
+$grpRemote.Location = New-Object System.Drawing.Point(10, 345)
 $grpRemote.Size = New-Object System.Drawing.Size(690, 70)
 $form.Controls.Add($grpRemote)
 
@@ -454,7 +523,7 @@ $grpRemote.Controls.Add($lblRemoteStatus)
 # --- Grupo: Comandos gerados ---
 $grpCmds = New-Object System.Windows.Forms.GroupBox
 $grpCmds.Text = "4. Linhas geradas (SCCM Deployment Type)"
-$grpCmds.Location = New-Object System.Drawing.Point(10, 400)
+$grpCmds.Location = New-Object System.Drawing.Point(10, 425)
 $grpCmds.Size = New-Object System.Drawing.Size(690, 130)
 $form.Controls.Add($grpCmds)
 
@@ -485,7 +554,7 @@ $grpCmds.Controls.Add($txtUninstallCmd)
 # --- Grupo: Testes (local ou remoto, dependendo da sessao) ---
 $grpTest = New-Object System.Windows.Forms.GroupBox
 $grpTest.Text = "5. Testes (local por padrao, ou na maquina remota se conectada acima)"
-$grpTest.Location = New-Object System.Drawing.Point(10, 540)
+$grpTest.Location = New-Object System.Drawing.Point(10, 565)
 $grpTest.Size = New-Object System.Drawing.Size(690, 60)
 $form.Controls.Add($grpTest)
 
@@ -516,7 +585,7 @@ $grpTest.Controls.Add($btnCreate)
 
 # --- Log ---
 $txtLog = New-Object System.Windows.Forms.TextBox
-$txtLog.Location = New-Object System.Drawing.Point(10, 610)
+$txtLog.Location = New-Object System.Drawing.Point(10, 635)
 $txtLog.Size = New-Object System.Drawing.Size(690, 160)
 $txtLog.Multiline = $true
 $txtLog.ScrollBars = 'Vertical'
@@ -596,6 +665,25 @@ $btnBrowse.Add_Click({
     }
 })
 
+$btnSourceCred.Add_Click({
+    $cred = Get-Credential -Message "Credenciais com acesso de LEITURA a pasta de origem (ex: sua conta pessoal, se a conta que roda este script - ex: conta de servico do SCCM - nao tiver acesso ao share)"
+    if (-not $cred) { return }
+    $script:SourceCredential = $cred
+    $lblSourceCredStatus.Text = "Acesso a pasta: usando credencial informada ($($cred.UserName))."
+    $lblSourceCredStatus.ForeColor = 'Green'
+    Write-Log "Credencial alternativa definida para acesso a pasta de origem ($($cred.UserName))."
+})
+
+$btnClearSourceCred.Add_Click({
+    $script:SourceCredential = $null
+    if (Get-PSDrive -Name 'SCCMSRC' -ErrorAction SilentlyContinue) {
+        Remove-PSDrive -Name 'SCCMSRC' -Force -ErrorAction SilentlyContinue
+    }
+    $lblSourceCredStatus.Text = "Acesso a pasta: usando a conta atual do script."
+    $lblSourceCredStatus.ForeColor = 'Gray'
+    Write-Log "Credencial alternativa removida. Voltando a usar a conta atual do script."
+})
+
 $btnScan.Add_Click({
     if ([string]::IsNullOrWhiteSpace($txtSourceFolder.Text)) {
         [System.Windows.Forms.MessageBox]::Show("Informe a pasta de origem.", "Aviso") | Out-Null
@@ -611,22 +699,35 @@ $btnScan.Add_Click({
         Write-Log "Caminho normalizado antes de validar: '$caminhoLimpo'"
     }
 
-    if (-not (Test-Path -LiteralPath $caminhoLimpo)) {
-        Write-Log "Falha ao validar caminho. Texto recebido entre aspas para depuracao: [`"$caminhoLimpo`"] (tamanho: $($caminhoLimpo.Length) caracteres)"
+    if ($script:SourceCredential) {
+        Write-Log "Testando acesso a pasta com a credencial alternativa ($($script:SourceCredential.UserName))..."
+    } else {
+        Write-Log "Testando acesso a pasta com a conta atual do script..."
+    }
+
+    $acesso = Resolve-SourceAccess -Path $caminhoLimpo -Credential $script:SourceCredential
+
+    if (-not $acesso.Sucesso) {
+        Write-Log "Falha ao acessar a pasta: $($acesso.Mensagem)"
+        Write-Log "Caminho testado: [`"$caminhoLimpo`"] (tamanho: $($caminhoLimpo.Length) caracteres)"
         [System.Windows.Forms.MessageBox]::Show(
             "Nao foi possivel acessar este caminho:`n`n$caminhoLimpo`n`n" +
-            "Verifique:`n" +
-            "- Se o caminho esta acessivel a partir desta sessao/usuario (nao so no Explorer)`n" +
-            "- Se nao sobrou aspas ou espaco extra (veja o log abaixo com o texto exato recebido)`n" +
-            "- Se a conta que esta rodando este script tem permissao de leitura no share",
+            "Detalhe: $($acesso.Mensagem)`n`n" +
+            "Se a conta que esta rodando este script (veja o titulo da janela do PowerShell) " +
+            "nao for a mesma que tem acesso ao share, use o botao 'Credenciais p/ Acessar Pasta...' " +
+            "e informe uma conta com permissao de leitura nesse caminho.",
             "Nao foi possivel acessar a pasta",
             'OK', 'Warning'
         ) | Out-Null
         return
     }
 
-    $script:InstallInfo   = Get-InstallCommandLine -FolderPath $caminhoLimpo -Action 'install'
-    $script:UninstallInfo = Get-InstallCommandLine -FolderPath $caminhoLimpo -Action 'uninstall'
+    $script:OriginalSourcePath  = $caminhoLimpo
+    $script:EffectiveSourcePath = $acesso.CaminhoEfetivo
+    Write-Log $acesso.Mensagem
+
+    $script:InstallInfo   = Get-InstallCommandLine -FolderPath $script:EffectiveSourcePath -Action 'install'
+    $script:UninstallInfo = Get-InstallCommandLine -FolderPath $script:EffectiveSourcePath -Action 'uninstall'
 
     $installStatus   = if ($script:InstallInfo.Encontrado)   { "$($script:InstallInfo.Tipo) ($($script:InstallInfo.Arquivo))" }   else { "NAO ENCONTRADO" }
     $uninstallStatus = if ($script:UninstallInfo.Encontrado) { "$($script:UninstallInfo.Tipo) ($($script:UninstallInfo.Arquivo))" } else { "NAO ENCONTRADO" }
@@ -688,12 +789,12 @@ $btnTestInstall.Add_Click({
     try {
         if ($script:TestSession -and $script:TestSession.State -eq 'Opened') {
             Write-Log "Executando instalacao de teste REMOTAMENTE em $($txtTestMachine.Text)..."
-            $output = Invoke-RemoteScriptAction -Session $script:TestSession -SourceFolder $txtSourceFolder.Text -ScriptInfo $script:InstallInfo
+            $output = Invoke-RemoteScriptAction -Session $script:TestSession -SourceFolder $script:EffectiveSourcePath -ScriptInfo $script:InstallInfo
             $output | ForEach-Object { Write-Log "  [remoto] $_" }
         }
         else {
-            Write-Log "Executando instalacao de teste LOCALMENTE em: $($txtSourceFolder.Text)"
-            Push-Location $txtSourceFolder.Text
+            Write-Log "Executando instalacao de teste LOCALMENTE em: $($script:EffectiveSourcePath)"
+            Push-Location $script:EffectiveSourcePath
             if ($script:InstallInfo.Tipo -eq 'PowerShell') {
                 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\$($script:InstallInfo.Arquivo)"
             } else {
@@ -714,12 +815,12 @@ $btnTestUninstall.Add_Click({
     try {
         if ($script:TestSession -and $script:TestSession.State -eq 'Opened') {
             Write-Log "Executando desinstalacao de teste REMOTAMENTE em $($txtTestMachine.Text)..."
-            $output = Invoke-RemoteScriptAction -Session $script:TestSession -SourceFolder $txtSourceFolder.Text -ScriptInfo $script:UninstallInfo
+            $output = Invoke-RemoteScriptAction -Session $script:TestSession -SourceFolder $script:EffectiveSourcePath -ScriptInfo $script:UninstallInfo
             $output | ForEach-Object { Write-Log "  [remoto] $_" }
         }
         else {
-            Write-Log "Executando desinstalacao de teste LOCALMENTE em: $($txtSourceFolder.Text)"
-            Push-Location $txtSourceFolder.Text
+            Write-Log "Executando desinstalacao de teste LOCALMENTE em: $($script:EffectiveSourcePath)"
+            Push-Location $script:EffectiveSourcePath
             if ($script:UninstallInfo.Tipo -eq 'PowerShell') {
                 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\$($script:UninstallInfo.Arquivo)"
             } else {
@@ -764,26 +865,27 @@ $btnCreate.Add_Click({
         return
     }
     if (-not $script:InstallInfo -or -not $script:InstallInfo.Encontrado -or
-        -not $script:UninstallInfo -or -not $script:UninstallInfo.Encontrado) {
-        [System.Windows.Forms.MessageBox]::Show("Escaneie a pasta e confirme que install/uninstall foram encontrados.", "Aviso") | Out-Null
+        -not $script:UninstallInfo -or -not $script:UninstallInfo.Encontrado -or
+        -not $script:OriginalSourcePath) {
+        [System.Windows.Forms.MessageBox]::Show("Escaneie a pasta (botao 'Escanear Pasta') e confirme que install/uninstall foram encontrados.", "Aviso") | Out-Null
         return
     }
 
     $script:DetectionText = New-DetectionScriptText -DisplayNamePattern $txtDetectPattern.Text -MinVersion $txtVersion.Text
 
     $confirm = [System.Windows.Forms.MessageBox]::Show(
-        "Confirma a criacao da aplicacao '$($txtAppName.Text)' no SCCM?",
+        "Confirma a criacao da aplicacao '$($txtAppName.Text)' no SCCM?`n`nContent Location (UNC real usado pelo SCCM):`n$($script:OriginalSourcePath)",
         "Confirmar",
         [System.Windows.Forms.MessageBoxButtons]::YesNo
     )
     if ($confirm -ne 'Yes') { return }
 
-    Write-Log "Criando aplicacao '$($txtAppName.Text)' no SCCM..."
+    Write-Log "Criando aplicacao '$($txtAppName.Text)' no SCCM (ContentLocation: $($script:OriginalSourcePath))..."
     $result = New-SCCMScriptApplication `
         -AppName $txtAppName.Text `
         -Publisher $txtPublisher.Text `
         -Version $txtVersion.Text `
-        -SourceFolder $txtSourceFolder.Text `
+        -SourceFolder $script:OriginalSourcePath `
         -InstallCommand $script:InstallInfo.Comando `
         -UninstallCommand $script:UninstallInfo.Comando `
         -DetectionScript $script:DetectionText
@@ -800,6 +902,9 @@ $btnCreate.Add_Click({
 $form.Add_FormClosing({
     if ($script:TestSession) {
         Remove-PSSession -Session $script:TestSession -ErrorAction SilentlyContinue
+    }
+    if (Get-PSDrive -Name 'SCCMSRC' -ErrorAction SilentlyContinue) {
+        Remove-PSDrive -Name 'SCCMSRC' -Force -ErrorAction SilentlyContinue
     }
 })
 
