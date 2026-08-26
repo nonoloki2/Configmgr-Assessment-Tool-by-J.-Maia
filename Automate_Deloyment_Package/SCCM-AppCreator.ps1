@@ -608,6 +608,114 @@ function Invoke-RemoteDetection {
     return $status.ScriptOutput
 }
 
+function Show-InstalledSoftwarePicker {
+    <#
+        Janela modal que lista os programas encontrados no registro da
+        maquina teste (via InventoryInstalledSoftware) e deixa o usuario
+        filtrar por nome e escolher exatamente qual DisplayName/DisplayVersion
+        usar no script de deteccao - reproduzindo a experiencia do "Browse..."
+        que o SCCM oferece nativamente para Deployment Types baseados em
+        MSI/EXE, mas que nao existe para Script Deployment Types.
+    #>
+    param(
+        [Parameter(Mandatory)][array]$Items,
+        [string]$InitialFilter = ''
+    )
+
+    $picker = New-Object System.Windows.Forms.Form
+    $picker.Text = "Selecione o aplicativo detectado no registro da maquina teste"
+    $picker.Size = New-Object System.Drawing.Size(660, 460)
+    $picker.StartPosition = 'CenterParent'
+    $picker.FormBorderStyle = 'FixedDialog'
+    $picker.MaximizeBox = $false
+    $picker.MinimizeBox = $false
+
+    $lblFilter = New-Object System.Windows.Forms.Label
+    $lblFilter.Text = "Filtrar por nome:"
+    $lblFilter.Location = New-Object System.Drawing.Point(10, 12)
+    $lblFilter.Size = New-Object System.Drawing.Size(100, 20)
+    $picker.Controls.Add($lblFilter)
+
+    $txtFilter = New-Object System.Windows.Forms.TextBox
+    $txtFilter.Location = New-Object System.Drawing.Point(115, 9)
+    $txtFilter.Size = New-Object System.Drawing.Size(520, 20)
+    $txtFilter.Text = $InitialFilter
+    $picker.Controls.Add($txtFilter)
+
+    $listView = New-Object System.Windows.Forms.ListView
+    $listView.Location = New-Object System.Drawing.Point(10, 38)
+    $listView.Size = New-Object System.Drawing.Size(625, 330)
+    $listView.View = 'Details'
+    $listView.FullRowSelect = $true
+    $listView.MultiSelect = $false
+    $listView.GridLines = $true
+    [void]$listView.Columns.Add("Nome (DisplayName)", 320)
+    [void]$listView.Columns.Add("Versao", 110)
+    [void]$listView.Columns.Add("Fabricante", 175)
+    $picker.Controls.Add($listView)
+
+    $script:__pickerItems = $Items
+
+    $refreshList = {
+        param($filterText)
+        $listView.Items.Clear()
+        foreach ($item in $script:__pickerItems) {
+            if ([string]::IsNullOrWhiteSpace($filterText) -or $item.DisplayName -like "*$filterText*") {
+                $lvi = New-Object System.Windows.Forms.ListViewItem([string]$item.DisplayName)
+                [void]$lvi.SubItems.Add([string]$item.DisplayVersion)
+                [void]$lvi.SubItems.Add([string]$item.Publisher)
+                $lvi.Tag = $item
+                [void]$listView.Items.Add($lvi)
+            }
+        }
+    }
+
+    & $refreshList $InitialFilter
+
+    $txtFilter.Add_TextChanged({ & $refreshList $txtFilter.Text }.GetNewClosure())
+
+    $lblCount = New-Object System.Windows.Forms.Label
+    $lblCount.Location = New-Object System.Drawing.Point(10, 372)
+    $lblCount.Size = New-Object System.Drawing.Size(400, 20)
+    $lblCount.Text = "$($Items.Count) programa(s) encontrado(s) no total nesta maquina."
+    $lblCount.ForeColor = 'Gray'
+    $picker.Controls.Add($lblCount)
+
+    $btnOk = New-Object System.Windows.Forms.Button
+    $btnOk.Text = "Selecionar"
+    $btnOk.Location = New-Object System.Drawing.Point(455, 368)
+    $btnOk.Size = New-Object System.Drawing.Size(90, 28)
+    $btnOk.DialogResult = [System.Windows.Forms.DialogResult]::OK
+    $picker.Controls.Add($btnOk)
+    $picker.AcceptButton = $btnOk
+
+    $btnCancel = New-Object System.Windows.Forms.Button
+    $btnCancel.Text = "Cancelar"
+    $btnCancel.Location = New-Object System.Drawing.Point(550, 368)
+    $btnCancel.Size = New-Object System.Drawing.Size(85, 28)
+    $btnCancel.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+    $picker.Controls.Add($btnCancel)
+    $picker.CancelButton = $btnCancel
+
+    $listView.Add_DoubleClick({
+        if ($listView.SelectedItems.Count -gt 0) {
+            $picker.DialogResult = [System.Windows.Forms.DialogResult]::OK
+            $picker.Close()
+        }
+    })
+
+    $resultado = $picker.ShowDialog()
+
+    $selecionado = $null
+    if ($resultado -eq [System.Windows.Forms.DialogResult]::OK -and $listView.SelectedItems.Count -gt 0) {
+        $selecionado = $listView.SelectedItems[0].Tag
+    }
+
+    Remove-Variable -Name __pickerItems -Scope script -ErrorAction SilentlyContinue
+    return $selecionado
+}
+
+
 function New-SCCMScriptApplication {
     param(
         [Parameter(Mandatory)][string]$AppName,
@@ -663,7 +771,7 @@ $script:OriginalSourcePath  = $null # caminho UNC real, sempre usado no -Content
 # ----------------------------------------------------------------------------
 $form                  = New-Object System.Windows.Forms.Form
 $form.Text             = "SCCM App Creator - Aplicacoes baseadas em Script"
-$form.Size             = New-Object System.Drawing.Size(720, 850)
+$form.Size             = New-Object System.Drawing.Size(720, 880)
 $form.StartPosition    = "CenterScreen"
 $form.FormBorderStyle  = 'FixedDialog'
 $form.MaximizeBox      = $false
@@ -826,7 +934,7 @@ $grpApp.Controls.Add($lblScanResult)
 $grpRemote = New-Object System.Windows.Forms.GroupBox
 $grpRemote.Text = "3. Maquina de Teste (Remota - opcional, use quando o script roda no servidor)"
 $grpRemote.Location = New-Object System.Drawing.Point(10, 360)
-$grpRemote.Size = New-Object System.Drawing.Size(690, 70)
+$grpRemote.Size = New-Object System.Drawing.Size(690, 100)
 $form.Controls.Add($grpRemote)
 
 $lblTestMachine = New-Object System.Windows.Forms.Label
@@ -859,10 +967,17 @@ $lblRemoteStatus.Location = New-Object System.Drawing.Point(10, 48)
 $lblRemoteStatus.Size = New-Object System.Drawing.Size(670, 18)
 $grpRemote.Controls.Add($lblRemoteStatus)
 
+$btnDetectRegistry = New-Object System.Windows.Forms.Button
+$btnDetectRegistry.Text = "Detectar no Registro da Maquina Teste (preenche DisplayName/Versao)"
+$btnDetectRegistry.Location = New-Object System.Drawing.Point(10, 70)
+$btnDetectRegistry.Size = New-Object System.Drawing.Size(420, 25)
+$btnDetectRegistry.BackColor = [System.Drawing.Color]::LightSteelBlue
+$grpRemote.Controls.Add($btnDetectRegistry)
+
 # --- Grupo: Comandos gerados ---
 $grpCmds = New-Object System.Windows.Forms.GroupBox
 $grpCmds.Text = "4. Linhas geradas (SCCM Deployment Type)"
-$grpCmds.Location = New-Object System.Drawing.Point(10, 440)
+$grpCmds.Location = New-Object System.Drawing.Point(10, 470)
 $grpCmds.Size = New-Object System.Drawing.Size(690, 130)
 $form.Controls.Add($grpCmds)
 
@@ -893,7 +1008,7 @@ $grpCmds.Controls.Add($txtUninstallCmd)
 # --- Grupo: Testes (local ou remoto, dependendo da sessao) ---
 $grpTest = New-Object System.Windows.Forms.GroupBox
 $grpTest.Text = "5. Testes (local por padrao, ou na maquina remota se conectada acima)"
-$grpTest.Location = New-Object System.Drawing.Point(10, 580)
+$grpTest.Location = New-Object System.Drawing.Point(10, 610)
 $grpTest.Size = New-Object System.Drawing.Size(690, 60)
 $form.Controls.Add($grpTest)
 
@@ -924,7 +1039,7 @@ $grpTest.Controls.Add($btnCreate)
 
 # --- Log ---
 $txtLog = New-Object System.Windows.Forms.TextBox
-$txtLog.Location = New-Object System.Drawing.Point(10, 650)
+$txtLog.Location = New-Object System.Drawing.Point(10, 680)
 $txtLog.Size = New-Object System.Drawing.Size(690, 160)
 $txtLog.Multiline = $true
 $txtLog.ScrollBars = 'Vertical'
@@ -1190,6 +1305,90 @@ $btnDisconnectRemote.Add_Click({
     $lblRemoteStatus.Text = "Sem maquina teste conectada pelo SCCM (testes rodarao localmente)."
     $lblRemoteStatus.ForeColor = 'Gray'
     Write-Log "Maquina teste desconectada da sessao logica do App Creator. Nenhuma PSSession/WinRM foi usada."
+})
+
+$btnDetectRegistry.Add_Click({
+    if (-not $script:RemoteTestConnected -or -not $script:RemoteTestComputer) {
+        [System.Windows.Forms.MessageBox]::Show("Conecte primeiro na maquina teste (botao 'Conectar via SCCM / SYSTEM' acima).", "Aviso") | Out-Null
+        return
+    }
+
+    Write-Log "Consultando o registro de $($script:RemoteTestComputer) via SCCM (Uninstall nativo + WOW6432Node)... isso pode levar ate 1-2 minutos."
+    $btnDetectRegistry.Enabled = $false
+    $form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
+
+    $status = $null
+    $erro = $null
+    try {
+        $status = Invoke-CMSystemAction -ComputerName $script:RemoteTestComputer -Action InventoryInstalledSoftware -TimeoutSeconds 120
+    }
+    catch {
+        $erro = $_.Exception.Message
+    }
+    finally {
+        $form.Cursor = [System.Windows.Forms.Cursors]::Default
+        $btnDetectRegistry.Enabled = $true
+    }
+
+    if ($erro) {
+        Write-Log "Erro ao consultar registro: $erro"
+        [System.Windows.Forms.MessageBox]::Show($erro, "Erro ao consultar registro", 'OK', 'Error') | Out-Null
+        return
+    }
+
+    $raw = $status.ScriptOutput
+    if ([string]::IsNullOrWhiteSpace($raw)) {
+        Write-Log "A maquina nao retornou nenhum dado de inventario."
+        [System.Windows.Forms.MessageBox]::Show("A maquina teste nao retornou nenhum dado. Verifique se o cliente SCCM esta online.", "Aviso") | Out-Null
+        return
+    }
+
+    try {
+        $json = $raw | ConvertFrom-Json -ErrorAction Stop
+    }
+    catch {
+        Write-Log "Falha ao interpretar o retorno JSON do inventario: $($_.Exception.Message)"
+        [System.Windows.Forms.MessageBox]::Show("A resposta da maquina teste nao pode ser lida como JSON.`n`nRetorno bruto:`n$raw", "Erro ao interpretar resposta", 'OK', 'Error') | Out-Null
+        return
+    }
+
+    if ($json -isnot [System.Array]) { $json = @($json) }
+
+    if ($json.Count -eq 0) {
+        Write-Log "Nenhum software encontrado no registro dessa maquina."
+        [System.Windows.Forms.MessageBox]::Show("Nenhum software encontrado no registro (Uninstall/WOW6432Node) da maquina teste.", "Aviso") | Out-Null
+        return
+    }
+
+    Write-Log "Encontrados $($json.Count) programa(s) no registro de $($script:RemoteTestComputer). Abrindo lista para selecao..."
+
+    $filtroInicial = $txtAppName.Text
+    $selecionado = Show-InstalledSoftwarePicker -Items $json -InitialFilter $filtroInicial
+
+    if (-not $selecionado) {
+        Write-Log "Selecao cancelada pelo usuario (nenhum item escolhido)."
+        return
+    }
+
+    $txtDetectPattern.Text = $selecionado.DisplayName
+    if (-not [string]::IsNullOrWhiteSpace($selecionado.DisplayVersion)) {
+        $txtVersion.Text = $selecionado.DisplayVersion
+    }
+    if ([string]::IsNullOrWhiteSpace($txtPublisher.Text) -and -not [string]::IsNullOrWhiteSpace($selecionado.Publisher)) {
+        $txtPublisher.Text = $selecionado.Publisher
+    }
+
+    Write-Log "Selecionado do registro: DisplayName='$($selecionado.DisplayName)' | DisplayVersion='$($selecionado.DisplayVersion)' | Publisher='$($selecionado.Publisher)'"
+
+    [System.Windows.Forms.MessageBox]::Show(
+        "Campos preenchidos com base no registro real da maquina teste:`n`n" +
+        "DisplayName: $($selecionado.DisplayName)`n" +
+        "DisplayVersion: $($selecionado.DisplayVersion)`n`n" +
+        "O script de deteccao vai comparar a versao instalada com esta. Numa atualizacao futura, " +
+        "basta repetir esse processo na maquina com a versao nova para regenerar a deteccao certa.",
+        "Detectado com sucesso",
+        'OK', 'Information'
+    ) | Out-Null
 })
 
 $btnTestInstall.Add_Click({
