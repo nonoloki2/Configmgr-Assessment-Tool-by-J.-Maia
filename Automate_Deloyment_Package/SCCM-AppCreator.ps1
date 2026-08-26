@@ -52,6 +52,109 @@ function Get-CleanPath {
     return $clean
 }
 
+function Copy-SourceViaInteractiveSession {
+    <#
+        Contorna o problema de a conta que roda este script (ex: conta de
+        servico do CyberArk, cuja senha ninguem digita/conhece) nao ter
+        acesso ao share de arquivos, enquanto o usuario JA LOGADO na sessao
+        interativa (o mesmo dono do explorer.exe, que abre a pasta numa boa)
+        tem acesso.
+
+        NAO PRECISA DE SENHA: cria uma Tarefa Agendada configurada para
+        rodar "como esse usuario logado" (LogonType Interactive). O Windows
+        reaproveita o token da sessao ja aberta - por isso nao pede senha.
+        Essa tarefa roda com a identidade do usuario interativo e copia a
+        pasta de origem para uma pasta local temporaria, que o processo
+        elevado (rodando como conta de servico) consegue ler normalmente
+        depois, ja que e so um arquivo local.
+
+        Requisitos: o usuario precisa estar com sessao ativa (explorer.exe
+        rodando) na mesma maquina, e a conta atual precisa poder criar
+        tarefas agendadas (normalmente ok, ja que esta rodando elevada).
+    #>
+    param(
+        [Parameter(Mandatory)][string]$SourcePath
+    )
+
+    try {
+        $explorerProc = Get-Process -Name explorer -IncludeUserName -ErrorAction Stop | Select-Object -First 1
+    }
+    catch {
+        return [PSCustomObject]@{ Sucesso = $false; CaminhoEfetivo = $null; Mensagem = "Nao foi possivel identificar o usuario da sessao interativa (falha ao consultar explorer.exe). Voce precisa estar rodando este script com privilegios suficientes para ver o usuario de outros processos, e ter uma sessao interativa ativa nesta maquina." }
+    }
+
+    if (-not $explorerProc -or -not $explorerProc.UserName) {
+        return [PSCustomObject]@{ Sucesso = $false; CaminhoEfetivo = $null; Mensagem = "Nenhuma sessao interativa (explorer.exe) encontrada nesta maquina." }
+    }
+
+    $interactiveUser = $explorerProc.UserName
+    $destFolder = Join-Path $env:TEMP ("SCCMAppSrc_" + [guid]::NewGuid().ToString('N').Substring(0,8))
+    $statusFile = Join-Path $destFolder "_status.txt"
+    $taskName   = "SCCMAppCreator_Copy_" + [guid]::NewGuid().ToString('N').Substring(0,8)
+    $helperScript = Join-Path $env:TEMP "$taskName.ps1"
+
+    try {
+        # Nao criamos $destFolder antecipadamente: se ele ja existir, o Copy-Item
+        # copia a pasta de origem para DENTRO dele (como subpasta), em vez de
+        # usar ele como o destino final. Deixando o Copy-Item criar o
+        # destino do zero, o conteudo fica direto em $destFolder.
+
+        $helperContent = @"
+try {
+    Copy-Item -LiteralPath '$SourcePath' -Destination '$destFolder' -Recurse -Force -ErrorAction Stop
+    New-Item -Path '$destFolder' -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
+    'OK' | Out-File -FilePath '$statusFile' -Encoding ascii -Force
+}
+catch {
+    New-Item -Path '$destFolder' -ItemType Directory -Force -ErrorAction SilentlyContinue | Out-Null
+    `$_.Exception.Message | Out-File -FilePath '$statusFile' -Encoding ascii -Force
+}
+"@
+        Set-Content -Path $helperScript -Value $helperContent -Encoding UTF8 -Force
+
+        $action    = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$helperScript`""
+        $principal = New-ScheduledTaskPrincipal -UserId $interactiveUser -LogonType Interactive -RunLevel Limited
+
+        Register-ScheduledTask -TaskName $taskName -Action $action -Principal $principal -Force -ErrorAction Stop | Out-Null
+        Start-ScheduledTask -TaskName $taskName -ErrorAction Stop
+
+        $timeoutSegundos = 60
+        $decorrido = 0
+        do {
+            Start-Sleep -Seconds 1
+            $decorrido++
+            $estado = (Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue).State
+        } while ($estado -eq 'Running' -and $decorrido -lt $timeoutSegundos)
+
+        Start-Sleep -Milliseconds 500  # da um tempinho pro arquivo de status terminar de gravar
+    }
+    finally {
+        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+        Remove-Item -Path $helperScript -Force -ErrorAction SilentlyContinue
+    }
+
+    if (-not (Test-Path -LiteralPath $statusFile)) {
+        return [PSCustomObject]@{
+            Sucesso = $false; CaminhoEfetivo = $null
+            Mensagem = "A tarefa nao concluiu a tempo ou nao gerou resultado. Verifique se '$interactiveUser' realmente tem uma sessao interativa ativa e acesso a essa pasta."
+        }
+    }
+
+    $status = (Get-Content -LiteralPath $statusFile -Raw).Trim()
+    Remove-Item -LiteralPath $statusFile -Force -ErrorAction SilentlyContinue
+
+    if ($status -eq 'OK') {
+        return [PSCustomObject]@{
+            Sucesso = $true; CaminhoEfetivo = $destFolder
+            Mensagem = "Pasta copiada com sucesso usando a sessao interativa de '$interactiveUser' (sem senha)."
+        }
+    }
+    else {
+        return [PSCustomObject]@{ Sucesso = $false; CaminhoEfetivo = $null; Mensagem = "Falha ao copiar como '$interactiveUser': $status" }
+    }
+}
+
+
 function Resolve-SourceAccess {
     <#
         Garante acesso de LEITURA a pasta de origem para fins de escaneamento/teste.
@@ -330,7 +433,7 @@ $script:OriginalSourcePath  = $null # caminho UNC real, sempre usado no -Content
 # ----------------------------------------------------------------------------
 $form                  = New-Object System.Windows.Forms.Form
 $form.Text             = "SCCM App Creator - Aplicacoes baseadas em Script"
-$form.Size             = New-Object System.Drawing.Size(720, 835)
+$form.Size             = New-Object System.Drawing.Size(720, 850)
 $form.StartPosition    = "CenterScreen"
 $form.FormBorderStyle  = 'FixedDialog'
 $form.MaximizeBox      = $false
@@ -381,7 +484,7 @@ $grpConn.Controls.Add($lblConnStatus)
 $grpApp = New-Object System.Windows.Forms.GroupBox
 $grpApp.Text = "2. Dados da Aplicacao"
 $grpApp.Location = New-Object System.Drawing.Point(10, 110)
-$grpApp.Size = New-Object System.Drawing.Size(690, 225)
+$grpApp.Size = New-Object System.Drawing.Size(690, 240)
 $form.Controls.Add($grpApp)
 
 $lblAppName = New-Object System.Windows.Forms.Label
@@ -455,38 +558,44 @@ $grpApp.Controls.Add($btnBrowse)
 $btnScan = New-Object System.Windows.Forms.Button
 $btnScan.Text = "Escanear Pasta"
 $btnScan.Location = New-Object System.Drawing.Point(290, 138)
-$btnScan.Size = New-Object System.Drawing.Size(100, 23)
+$btnScan.Size = New-Object System.Drawing.Size(120, 23)
 $grpApp.Controls.Add($btnScan)
 
+$btnUseInteractiveSession = New-Object System.Windows.Forms.Button
+$btnUseInteractiveSession.Text = "Usar sessao logada (sem senha)"
+$btnUseInteractiveSession.Location = New-Object System.Drawing.Point(140, 165)
+$btnUseInteractiveSession.Size = New-Object System.Drawing.Size(220, 23)
+$grpApp.Controls.Add($btnUseInteractiveSession)
+
 $btnSourceCred = New-Object System.Windows.Forms.Button
-$btnSourceCred.Text = "Credenciais p/ Acessar Pasta..."
-$btnSourceCred.Location = New-Object System.Drawing.Point(400, 138)
-$btnSourceCred.Size = New-Object System.Drawing.Size(180, 23)
+$btnSourceCred.Text = "Ou informar credencial..."
+$btnSourceCred.Location = New-Object System.Drawing.Point(365, 165)
+$btnSourceCred.Size = New-Object System.Drawing.Size(150, 23)
 $grpApp.Controls.Add($btnSourceCred)
 
 $btnClearSourceCred = New-Object System.Windows.Forms.Button
 $btnClearSourceCred.Text = "Limpar"
-$btnClearSourceCred.Location = New-Object System.Drawing.Point(585, 138)
+$btnClearSourceCred.Location = New-Object System.Drawing.Point(520, 165)
 $btnClearSourceCred.Size = New-Object System.Drawing.Size(55, 23)
 $grpApp.Controls.Add($btnClearSourceCred)
 
 $lblSourceCredStatus = New-Object System.Windows.Forms.Label
 $lblSourceCredStatus.Text = "Acesso a pasta: usando a conta atual do script."
 $lblSourceCredStatus.ForeColor = 'Gray'
-$lblSourceCredStatus.Location = New-Object System.Drawing.Point(10, 165)
+$lblSourceCredStatus.Location = New-Object System.Drawing.Point(10, 192)
 $lblSourceCredStatus.Size = New-Object System.Drawing.Size(670, 18)
 $grpApp.Controls.Add($lblSourceCredStatus)
 
 $lblScanResult = New-Object System.Windows.Forms.Label
 $lblScanResult.Text = "Instalacao: -- | Desinstalacao: --"
-$lblScanResult.Location = New-Object System.Drawing.Point(10, 183)
+$lblScanResult.Location = New-Object System.Drawing.Point(10, 210)
 $lblScanResult.Size = New-Object System.Drawing.Size(670, 20)
 $grpApp.Controls.Add($lblScanResult)
 
 # --- Grupo: Maquina de Teste Remota (CyberArk / conta de servico sem acesso a maquina teste) ---
 $grpRemote = New-Object System.Windows.Forms.GroupBox
 $grpRemote.Text = "3. Maquina de Teste (Remota - opcional, use quando o script roda no servidor)"
-$grpRemote.Location = New-Object System.Drawing.Point(10, 345)
+$grpRemote.Location = New-Object System.Drawing.Point(10, 360)
 $grpRemote.Size = New-Object System.Drawing.Size(690, 70)
 $form.Controls.Add($grpRemote)
 
@@ -523,7 +632,7 @@ $grpRemote.Controls.Add($lblRemoteStatus)
 # --- Grupo: Comandos gerados ---
 $grpCmds = New-Object System.Windows.Forms.GroupBox
 $grpCmds.Text = "4. Linhas geradas (SCCM Deployment Type)"
-$grpCmds.Location = New-Object System.Drawing.Point(10, 425)
+$grpCmds.Location = New-Object System.Drawing.Point(10, 440)
 $grpCmds.Size = New-Object System.Drawing.Size(690, 130)
 $form.Controls.Add($grpCmds)
 
@@ -554,7 +663,7 @@ $grpCmds.Controls.Add($txtUninstallCmd)
 # --- Grupo: Testes (local ou remoto, dependendo da sessao) ---
 $grpTest = New-Object System.Windows.Forms.GroupBox
 $grpTest.Text = "5. Testes (local por padrao, ou na maquina remota se conectada acima)"
-$grpTest.Location = New-Object System.Drawing.Point(10, 565)
+$grpTest.Location = New-Object System.Drawing.Point(10, 580)
 $grpTest.Size = New-Object System.Drawing.Size(690, 60)
 $form.Controls.Add($grpTest)
 
@@ -585,7 +694,7 @@ $grpTest.Controls.Add($btnCreate)
 
 # --- Log ---
 $txtLog = New-Object System.Windows.Forms.TextBox
-$txtLog.Location = New-Object System.Drawing.Point(10, 635)
+$txtLog.Location = New-Object System.Drawing.Point(10, 650)
 $txtLog.Size = New-Object System.Drawing.Size(690, 160)
 $txtLog.Multiline = $true
 $txtLog.ScrollBars = 'Vertical'
@@ -665,6 +774,81 @@ $btnBrowse.Add_Click({
     }
 })
 
+function Complete-FolderScan {
+    <#
+        Aplica o resultado de um acesso bem-sucedido a pasta de origem:
+        guarda os caminhos, escaneia install/uninstall e atualiza a GUI.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$CaminhoOriginal,
+        [Parameter(Mandatory)][PSCustomObject]$Acesso
+    )
+
+    $script:OriginalSourcePath  = $CaminhoOriginal
+    $script:EffectiveSourcePath = $Acesso.CaminhoEfetivo
+    Write-Log $Acesso.Mensagem
+
+    $script:InstallInfo   = Get-InstallCommandLine -FolderPath $script:EffectiveSourcePath -Action 'install'
+    $script:UninstallInfo = Get-InstallCommandLine -FolderPath $script:EffectiveSourcePath -Action 'uninstall'
+
+    $installStatus   = if ($script:InstallInfo.Encontrado)   { "$($script:InstallInfo.Tipo) ($($script:InstallInfo.Arquivo))" }   else { "NAO ENCONTRADO" }
+    $uninstallStatus = if ($script:UninstallInfo.Encontrado) { "$($script:UninstallInfo.Tipo) ($($script:UninstallInfo.Arquivo))" } else { "NAO ENCONTRADO" }
+    $lblScanResult.Text = "Instalacao: $installStatus | Desinstalacao: $uninstallStatus"
+
+    if ($script:InstallInfo.Encontrado)   { $txtInstallCmd.Text   = $script:InstallInfo.Comando }   else { $txtInstallCmd.Text = "" }
+    if ($script:UninstallInfo.Encontrado) { $txtUninstallCmd.Text = $script:UninstallInfo.Comando } else { $txtUninstallCmd.Text = "" }
+
+    if (-not $script:InstallInfo.Encontrado -or -not $script:UninstallInfo.Encontrado) {
+        Write-Log "ATENCAO: nao foram encontrados install.ps1/.bat e/ou uninstall.ps1/.bat na pasta."
+    } else {
+        Write-Log "Scripts encontrados. Install: $($script:InstallInfo.Comando) | Uninstall: $($script:UninstallInfo.Comando)"
+    }
+
+    if ([string]::IsNullOrWhiteSpace($txtDetectPattern.Text) -and -not [string]::IsNullOrWhiteSpace($txtAppName.Text)) {
+        $txtDetectPattern.Text = $txtAppName.Text
+    }
+}
+
+$btnUseInteractiveSession.Add_Click({
+    if ([string]::IsNullOrWhiteSpace($txtSourceFolder.Text)) {
+        [System.Windows.Forms.MessageBox]::Show("Informe a pasta de origem primeiro.", "Aviso") | Out-Null
+        return
+    }
+
+    $caminhoOriginal = $txtSourceFolder.Text
+    $caminhoLimpo    = Get-CleanPath -Path $caminhoOriginal
+    if ($caminhoOriginal -ne $caminhoLimpo) {
+        $txtSourceFolder.Text = $caminhoLimpo
+        Write-Log "Caminho normalizado antes de validar: '$caminhoLimpo'"
+    }
+
+    Write-Log "Copiando pasta de origem via sessao interativa logada (sem senha)... isso pode levar alguns segundos."
+    $form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
+    try {
+        $acesso = Copy-SourceViaInteractiveSession -SourcePath $caminhoLimpo
+    }
+    finally {
+        $form.Cursor = [System.Windows.Forms.Cursors]::Default
+    }
+
+    if (-not $acesso.Sucesso) {
+        Write-Log "Falha: $($acesso.Mensagem)"
+        [System.Windows.Forms.MessageBox]::Show(
+            "Nao foi possivel copiar a pasta usando a sessao interativa logada.`n`n" +
+            "Detalhe: $($acesso.Mensagem)`n`n" +
+            "Alternativas: use o botao 'Ou informar credencial...' se voce tiver um usuario " +
+            "e senha (mesmo que seja o seu proprio login do Windows) com acesso a essa pasta.",
+            "Falha ao copiar via sessao interativa",
+            'OK', 'Warning'
+        ) | Out-Null
+        return
+    }
+
+    $lblSourceCredStatus.Text = "Acesso a pasta: copiada via sessao interativa logada (sem senha)."
+    $lblSourceCredStatus.ForeColor = 'Green'
+    Complete-FolderScan -CaminhoOriginal $caminhoLimpo -Acesso $acesso
+})
+
 $btnSourceCred.Add_Click({
     $cred = Get-Credential -Message "Credenciais com acesso de LEITURA a pasta de origem (ex: sua conta pessoal, se a conta que roda este script - ex: conta de servico do SCCM - nao tiver acesso ao share)"
     if (-not $cred) { return }
@@ -713,38 +897,15 @@ $btnScan.Add_Click({
         [System.Windows.Forms.MessageBox]::Show(
             "Nao foi possivel acessar este caminho:`n`n$caminhoLimpo`n`n" +
             "Detalhe: $($acesso.Mensagem)`n`n" +
-            "Se a conta que esta rodando este script (veja o titulo da janela do PowerShell) " +
-            "nao for a mesma que tem acesso ao share, use o botao 'Credenciais p/ Acessar Pasta...' " +
-            "e informe uma conta com permissao de leitura nesse caminho.",
+            "Se voce nao tem uma credencial para digitar, use o botao " +
+            "'Usar sessao logada (sem senha)' em vez deste.",
             "Nao foi possivel acessar a pasta",
             'OK', 'Warning'
         ) | Out-Null
         return
     }
 
-    $script:OriginalSourcePath  = $caminhoLimpo
-    $script:EffectiveSourcePath = $acesso.CaminhoEfetivo
-    Write-Log $acesso.Mensagem
-
-    $script:InstallInfo   = Get-InstallCommandLine -FolderPath $script:EffectiveSourcePath -Action 'install'
-    $script:UninstallInfo = Get-InstallCommandLine -FolderPath $script:EffectiveSourcePath -Action 'uninstall'
-
-    $installStatus   = if ($script:InstallInfo.Encontrado)   { "$($script:InstallInfo.Tipo) ($($script:InstallInfo.Arquivo))" }   else { "NAO ENCONTRADO" }
-    $uninstallStatus = if ($script:UninstallInfo.Encontrado) { "$($script:UninstallInfo.Tipo) ($($script:UninstallInfo.Arquivo))" } else { "NAO ENCONTRADO" }
-    $lblScanResult.Text = "Instalacao: $installStatus | Desinstalacao: $uninstallStatus"
-
-    if ($script:InstallInfo.Encontrado)   { $txtInstallCmd.Text   = $script:InstallInfo.Comando }   else { $txtInstallCmd.Text = "" }
-    if ($script:UninstallInfo.Encontrado) { $txtUninstallCmd.Text = $script:UninstallInfo.Comando } else { $txtUninstallCmd.Text = "" }
-
-    if (-not $script:InstallInfo.Encontrado -or -not $script:UninstallInfo.Encontrado) {
-        Write-Log "ATENCAO: nao foram encontrados install.ps1/.bat e/ou uninstall.ps1/.bat na pasta."
-    } else {
-        Write-Log "Scripts encontrados. Install: $($script:InstallInfo.Comando) | Uninstall: $($script:UninstallInfo.Comando)"
-    }
-
-    if ([string]::IsNullOrWhiteSpace($txtDetectPattern.Text) -and -not [string]::IsNullOrWhiteSpace($txtAppName.Text)) {
-        $txtDetectPattern.Text = $txtAppName.Text
-    }
+    Complete-FolderScan -CaminhoOriginal $caminhoLimpo -Acesso $acesso
 })
 
 $btnConnectRemote.Add_Click({
