@@ -763,7 +763,7 @@ function Wait-CMScriptResult {
                     Sort-Object ClientOperationID -Descending |
                     Select-Object -First 1
                 if ($execTask -and $execTask.TaskID) {
-                    $taskId = [uint32]$execTask.TaskID
+                    $taskId = [string]$execTask.TaskID
                 }
             }
 
@@ -795,7 +795,12 @@ function Wait-CMScriptResult {
                 # GroupType 1 normalmente representa os resultados retornados
                 # pelos clientes. Nao limitamos exclusivamente a ele para manter
                 # compatibilidade com builds diferentes do ConfigMgr.
-                $summaries = @(Get-CimInstance -ComputerName $SiteServer -Namespace $namespace -ClassName SMS_ScriptsExecutionSummary -Filter "TaskID = '$taskId'" -ErrorAction SilentlyContinue)
+                # TaskID em SMS_ScriptsExecutionTask e SMS_ScriptsExecutionSummary
+                # e um GUID/string neste ambiente. Nao converter para UInt32 e nao
+                # montar filtro WQL numerico. Consultamos a classe e correlacionamos
+                # em memoria pelo TaskID exato.
+                $summaries = @(Get-CimInstance -ComputerName $SiteServer -Namespace $namespace -ClassName SMS_ScriptsExecutionSummary -ErrorAction SilentlyContinue |
+                    Where-Object { [string]$_.TaskID -eq [string]$taskId })
 
                 $summaryWithOutput = $summaries |
                     Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_.ScriptOutput) } |
@@ -1177,7 +1182,7 @@ $script:OriginalSourcePath  = $null # caminho UNC real, sempre usado no -Content
 $script:DetectionMode     = 'Registry'  # 'Registry' ou 'File'
 $script:DetectionFilePath = $null       # caminho do executavel, quando DetectionMode = 'File'
 $script:DetectedRegistryApp = $null      # entrada real descoberta automaticamente na maquina teste
-$script:BuildId = '2026.08.26-REBUILT-STABLE-SOURCEFIX4'
+$script:BuildId = '2026.08.26-REBUILT-STABLE-SOURCEFIX5'
 
 # ----------------------------------------------------------------------------
 # GUI
