@@ -55,33 +55,57 @@ function Get-CleanPath {
 
 function Get-SourceManifestViaInteractiveSession {
     <#
-        Le SOMENTE os arquivos de controle da pasta de origem usando o token
-        do usuario interativo ja logado. Nao copia o pacote e nao altera o UNC.
-        Serve exclusivamente para descobrir install.ps1/install.bat e
-        uninstall.ps1/uninstall.bat quando a conta que abriu esta GUI nao tem
-        acesso direto ao compartilhamento.
+        Le SOMENTE o inventario da raiz da pasta de origem usando o usuario
+        interativo da MESMA sessao onde esta GUI esta aberta.
+
+        IMPORTANTE:
+        - nao copia o pacote;
+        - nao altera o UNC original;
+        - primeiro ENUMERA a pasta com Get-ChildItem -ErrorAction Stop;
+        - somente depois decide se install/uninstall existem;
+        - se o UNC nao puder ser enumerado, retorna ERRO DE ACESSO em vez de
+          fingir que os arquivos nao existem.
     #>
     param([Parameter(Mandatory)][string]$SourcePath)
 
     try {
-        $explorerProc = Get-Process -Name explorer -IncludeUserName -ErrorAction Stop |
-            Where-Object { $_.UserName } | Select-Object -First 1
+        $guiSessionId = (Get-Process -Id $PID -ErrorAction Stop).SessionId
+        $allExplorers = @(Get-Process -Name explorer -IncludeUserName -ErrorAction Stop |
+            Where-Object { $_.UserName })
+
+        # Prioridade absoluta: Explorer da MESMA sessao da GUI.
+        $explorerProc = $allExplorers |
+            Where-Object { $_.SessionId -eq $guiSessionId } |
+            Select-Object -First 1
+
+        # Fallback apenas se a GUI estiver em uma sessao sem explorer.exe.
+        if (-not $explorerProc) {
+            $explorerProc = $allExplorers |
+                Sort-Object StartTime -Descending |
+                Select-Object -First 1
+        }
     }
     catch {
-        return [pscustomobject]@{ Sucesso=$false; Mensagem="Nao foi possivel identificar o usuario da sessao interativa: $($_.Exception.Message)" }
+        return [pscustomobject]@{
+            Sucesso=$false
+            Mensagem="Nao foi possivel identificar o usuario da sessao interativa: $($_.Exception.Message)"
+        }
     }
 
     if (-not $explorerProc -or -not $explorerProc.UserName) {
-        return [pscustomobject]@{ Sucesso=$false; Mensagem='Nenhuma sessao interativa com explorer.exe foi encontrada.' }
+        return [pscustomobject]@{
+            Sucesso=$false
+            Mensagem='Nenhuma sessao interativa com explorer.exe foi encontrada.'
+        }
     }
 
     $interactiveUser = [string]$explorerProc.UserName
+    $interactiveSessionId = [int]$explorerProc.SessionId
     $token = [guid]::NewGuid().ToString('N')
     $taskName = "SCCMAppCreator_Scan_$($token.Substring(0,8))"
     $helperScript = Join-Path $env:TEMP "$taskName.ps1"
     $resultFile = Join-Path $env:TEMP "$taskName.json"
 
-    # Literal seguro para inserir em um script PowerShell entre aspas simples.
     $safeSource = $SourcePath.Replace("'", "''")
     $safeResult = $resultFile.Replace("'", "''")
 
@@ -89,19 +113,36 @@ function Get-SourceManifestViaInteractiveSession {
 `$ErrorActionPreference = 'Stop'
 try {
     `$root = '$safeSource'
+
+    # Enumerar a raiz e obrigar erro real caso o UNC nao esteja acessivel.
+    `$items = @(Get-ChildItem -LiteralPath `$root -Force -File -ErrorAction Stop)
+    `$names = @(`$items | ForEach-Object { [string]`$_.Name })
+    `$lower = @(`$names | ForEach-Object { `$_.ToLowerInvariant() })
+
     `$result = [ordered]@{
         Success = `$true
         Error = `$null
-        InstallPs1 = Test-Path -LiteralPath (Join-Path `$root 'install.ps1') -PathType Leaf
-        InstallBat = Test-Path -LiteralPath (Join-Path `$root 'install.bat') -PathType Leaf
-        UninstallPs1 = Test-Path -LiteralPath (Join-Path `$root 'uninstall.ps1') -PathType Leaf
-        UninstallBat = Test-Path -LiteralPath (Join-Path `$root 'uninstall.bat') -PathType Leaf
+        Root = `$root
+        Files = `$names
+        InstallPs1 = (`$lower -contains 'install.ps1')
+        InstallBat = (`$lower -contains 'install.bat')
+        UninstallPs1 = (`$lower -contains 'uninstall.ps1')
+        UninstallBat = (`$lower -contains 'uninstall.bat')
     }
 }
 catch {
-    `$result = [ordered]@{ Success=`$false; Error=`$_.Exception.Message; InstallPs1=`$false; InstallBat=`$false; UninstallPs1=`$false; UninstallBat=`$false }
+    `$result = [ordered]@{
+        Success = `$false
+        Error = `$_.Exception.Message
+        Root = '$safeSource'
+        Files = @()
+        InstallPs1 = `$false
+        InstallBat = `$false
+        UninstallPs1 = `$false
+        UninstallBat = `$false
+    }
 }
-`$result | ConvertTo-Json -Compress | Set-Content -LiteralPath '$safeResult' -Encoding UTF8 -Force
+`$result | ConvertTo-Json -Depth 4 -Compress | Set-Content -LiteralPath '$safeResult' -Encoding UTF8 -Force
 "@
 
     try {
@@ -117,12 +158,18 @@ catch {
         }
 
         if (-not (Test-Path -LiteralPath $resultFile)) {
-            return [pscustomobject]@{ Sucesso=$false; Mensagem="A leitura da pasta nao retornou em 30 segundos como '$interactiveUser'." }
+            return [pscustomobject]@{
+                Sucesso=$false
+                Mensagem="A leitura da pasta nao retornou em 30 segundos como '$interactiveUser' (sessao $interactiveSessionId)."
+            }
         }
 
         $result = Get-Content -LiteralPath $resultFile -Raw | ConvertFrom-Json -ErrorAction Stop
         if (-not $result.Success) {
-            return [pscustomobject]@{ Sucesso=$false; Mensagem="Falha ao ler '$SourcePath' como '$interactiveUser': $($result.Error)" }
+            return [pscustomobject]@{
+                Sucesso=$false
+                Mensagem="O usuario '$interactiveUser' (sessao $interactiveSessionId) NAO conseguiu enumerar o UNC '$SourcePath'. Erro real: $($result.Error)"
+            }
         }
 
         function New-ManifestCommandInfo {
@@ -136,11 +183,15 @@ catch {
             return [pscustomobject]@{ Encontrado=$false; Tipo=$null; Arquivo=$null; Comando=$null }
         }
 
+        $filesFound = @($result.Files)
+        $fileSummary = if ($filesFound.Count -gt 0) { $filesFound -join ', ' } else { '<pasta vazia>' }
+
         return [pscustomobject]@{
             Sucesso = $true
-            Mensagem = "Pasta lida com sucesso pela sessao interativa de '$interactiveUser' (sem copiar o pacote)."
+            Mensagem = "UNC enumerado com sucesso como '$interactiveUser' (sessao $interactiveSessionId). Arquivos na raiz: $fileSummary"
             InstallInfo = New-ManifestCommandInfo -Ps1 ([bool]$result.InstallPs1) -Bat ([bool]$result.InstallBat) -Action 'install'
             UninstallInfo = New-ManifestCommandInfo -Ps1 ([bool]$result.UninstallPs1) -Bat ([bool]$result.UninstallBat) -Action 'uninstall'
+            Files = $filesFound
         }
     }
     catch {
@@ -1058,7 +1109,7 @@ $script:OriginalSourcePath  = $null # caminho UNC real, sempre usado no -Content
 $script:DetectionMode     = 'Registry'  # 'Registry' ou 'File'
 $script:DetectionFilePath = $null       # caminho do executavel, quando DetectionMode = 'File'
 $script:DetectedRegistryApp = $null      # entrada real descoberta automaticamente na maquina teste
-$script:BuildId = '2026.08.26-REBUILT-STABLE'
+$script:BuildId = '2026.08.26-REBUILT-STABLE-SOURCEFIX1'
 
 # ----------------------------------------------------------------------------
 # GUI
