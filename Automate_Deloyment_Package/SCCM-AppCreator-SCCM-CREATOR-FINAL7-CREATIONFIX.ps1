@@ -176,7 +176,7 @@ catch {
             param([bool]$Ps1,[bool]$Bat,[string]$Action)
             # Wrapper .BAT tem prioridade quando existe.
             if ($Bat) {
-                return [pscustomobject]@{ Encontrado=$true; Tipo='Batch'; Arquivo="$Action.bat"; Comando="$Action.bat" }
+                return [pscustomobject]@{ Encontrado=$true; Tipo='Batch'; Arquivo="$Action.bat"; Comando="cmd.exe /c `"$Action.bat`"" }
             }
             if ($Ps1) {
                 return [pscustomobject]@{ Encontrado=$true; Tipo='PowerShell'; Arquivo="$Action.ps1"; Comando="powershell.exe -NoProfile -ExecutionPolicy Bypass -File `".\$Action.ps1`"" }
@@ -275,7 +275,7 @@ function Get-InstallCommandLine {
             Encontrado = $true
             Tipo       = 'Batch'
             Arquivo    = "$Action.bat"
-            Comando    = "$Action.bat"
+            Comando    = "cmd.exe /c `"$Action.bat`""
         }
     }
     elseif (Test-Path -LiteralPath $ps1Path) {
@@ -1510,7 +1510,7 @@ $script:DetectionMode     = 'Registry'  # 'Registry' ou 'File'
 $script:DetectionFilePath = $null       # caminho do executavel, quando DetectionMode = 'File'
 $script:DetectedRegistryApp = $null      # entrada real descoberta automaticamente na maquina teste
 $script:RegistryUninstallCommand = $null  # uninstall silencioso vindo do registro; source e fallback
-$script:BuildId = '2026.08.26-SCCM-CREATOR-FINAL6-CMDLINEFIX'
+$script:BuildId = '2026.08.26-SCCM-CREATOR-FINAL7-CREATIONFIX'
 
 # ----------------------------------------------------------------------------
 # GUI
