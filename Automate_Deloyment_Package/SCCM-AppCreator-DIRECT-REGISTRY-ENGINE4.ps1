@@ -1017,7 +1017,7 @@ function Get-RemoteRegistrySubKeys {
     param(
         [Parameter(Mandatory)]$CimSession,
         [Parameter(Mandatory)][uint32]$Hive,
-        [Parameter(Mandatory)][string]$SubKey
+        [Parameter(Mandatory)][AllowEmptyString()][string]$SubKey
     )
     try {
         $r = Invoke-CimMethod -CimSession $CimSession -Namespace 'root\default' -ClassName 'StdRegProv' `
@@ -1343,7 +1343,7 @@ $script:DetectionMode     = 'Registry'  # 'Registry' ou 'File'
 $script:DetectionFilePath = $null       # caminho do executavel, quando DetectionMode = 'File'
 $script:DetectedRegistryApp = $null      # entrada real descoberta automaticamente na maquina teste
 $script:RegistryUninstallCommand = $null  # uninstall silencioso vindo do registro; source e fallback
-$script:BuildId = '2026.08.26-DIRECT-REGISTRY-ENGINE3'
+$script:BuildId = '2026.08.26-DIRECT-REGISTRY-ENGINE4'
 
 # ----------------------------------------------------------------------------
 # GUI
