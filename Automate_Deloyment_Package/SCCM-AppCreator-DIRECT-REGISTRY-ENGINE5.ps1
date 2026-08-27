@@ -1343,7 +1343,7 @@ $script:DetectionMode     = 'Registry'  # 'Registry' ou 'File'
 $script:DetectionFilePath = $null       # caminho do executavel, quando DetectionMode = 'File'
 $script:DetectedRegistryApp = $null      # entrada real descoberta automaticamente na maquina teste
 $script:RegistryUninstallCommand = $null  # uninstall silencioso vindo do registro; source e fallback
-$script:BuildId = '2026.08.26-DIRECT-REGISTRY-ENGINE4'
+$script:BuildId = '2026.08.26-DIRECT-REGISTRY-ENGINE5'
 
 # ----------------------------------------------------------------------------
 # GUI
@@ -2287,68 +2287,97 @@ function Build-CurrentDetectionText {
     return New-DetectionScriptText -DisplayNamePattern $realName -MinVersion $realVersion
 }
 
+function Convert-AppVersionObject {
+    param([string]$Text)
+    if ([string]::IsNullOrWhiteSpace($Text)) { return $null }
+    $m = [regex]::Match($Text, '\d+(?:\.\d+){0,3}')
+    if (-not $m.Success) { return $null }
+    $parts = @($m.Value.Split('.') | ForEach-Object { [int]$_ })
+    while ($parts.Count -lt 4) { $parts += 0 }
+    try { return [version]::new($parts[0],$parts[1],$parts[2],$parts[3]) } catch { return $null }
+}
+
 $btnTestDetection.Add_Click({
     try {
         if ($script:RemoteTestConnected -and $script:RemoteTestComputer) {
             if ($script:DetectionMode -eq 'File' -and $script:DetectionFilePath) {
-                Write-Log "Testando deteccao por ARQUIVO em $($script:RemoteTestComputer) via SCCM/SYSTEM: $($script:DetectionFilePath)"
+                # Mantem o fluxo de arquivo existente; esta correcao e especifica
+                # para deteccao por REGISTRO, que nao deve usar Run Script/payload.
+                Write-Log "Testando deteccao por ARQUIVO em $($script:RemoteTestComputer)."
                 $raw = Invoke-RemoteDetection -ComputerName $script:RemoteTestComputer -FilePath $script:DetectionFilePath -MinVersion $txtVersion.Text
-            }
-            else {
-                if (-not $script:DetectedRegistryApp) {
-                    [System.Windows.Forms.MessageBox]::Show("Primeiro gere a deteccao automaticamente pelo Nome da Aplicacao.", "Aviso") | Out-Null
-                    return
+                $obj = $null
+                try { $obj = $raw | ConvertFrom-Json -ErrorAction Stop } catch {}
+                if ($obj -and $obj.Result -eq 'Instalado') {
+                    Write-Log "RESULTADO: Instalado (deteccao por arquivo OK)"
+                    [System.Windows.Forms.MessageBox]::Show("DETECTADO`n`nArquivo: $($script:DetectionFilePath)`nVersao minima: $($txtVersion.Text)","Teste de Deteccao",'OK','Information') | Out-Null
+                } else {
+                    Write-Log "RESULTADO: Nao detectado por arquivo."
+                    [System.Windows.Forms.MessageBox]::Show("NAO DETECTADO`n`nArquivo: $($script:DetectionFilePath)","Teste de Deteccao",'OK','Warning') | Out-Null
                 }
-                $realName = [string]$script:DetectedRegistryApp.DisplayName
-                $realVersion = [string]$script:DetectedRegistryApp.DisplayVersion
-                Write-Log "Testando deteccao por REGISTRO em $($script:RemoteTestComputer) via SCCM/SYSTEM: DisplayName real='$realName', versao descoberta=$realVersion"
-                $raw = Invoke-RemoteDetection -ComputerName $script:RemoteTestComputer -DisplayNamePattern $realName -MinVersion $realVersion
-            }
-
-            $obj = $null
-            try { $obj = $raw | ConvertFrom-Json -ErrorAction Stop } catch {}
-
-            if (-not $obj) {
-                Write-Log "Nao foi possivel interpretar o retorno da maquina teste. Retorno bruto: $raw"
                 return
             }
 
-            Write-Log "Contexto remoto: $($obj.Identity)"
-
-            if ($obj.Correspondencias -and $obj.Correspondencias.Count -gt 0) {
-                Write-Log "Candidatos encontrados no registro (nome bateu, mesmo que a versao nao bata ainda):"
-                foreach ($linha in $obj.Correspondencias) { Write-Log "  - $linha" }
-            }
-            elseif ($script:DetectionMode -ne 'File') {
-                Write-Log "NENHUM candidato encontrado com esse padrao de nome em HKLM/WOW6432Node/HKU nessa maquina."
+            if (-not $script:DetectedRegistryApp) {
+                [System.Windows.Forms.MessageBox]::Show("Primeiro gere a deteccao automaticamente pelo Nome da Aplicacao.", "Aviso") | Out-Null
+                return
             }
 
-            if ($script:DetectionMode -eq 'File') {
-                Write-Log "Arquivo existe? $($obj.Existe) | Versao do arquivo: $($obj.FileVersion)"
+            $realName    = [string]$script:DetectedRegistryApp.DisplayName
+            $realVersion = [string]$script:DetectedRegistryApp.DisplayVersion
+
+            Write-Log "[DETECTION DIRECT] Testando diretamente o registro de $($script:RemoteTestComputer). SEM Run Script, SEM payload."
+            Write-Log "[DETECTION DIRECT] Esperado: DisplayName='$realName' | versao >= '$realVersion'"
+
+            $matches = @(Get-InstalledProgramsRemote -ComputerName $script:RemoteTestComputer -Filter $realName)
+            $expectedNorm = Get-NormalizedSoftwareName $realName
+            $expectedVer  = Convert-AppVersionObject $realVersion
+
+            $best = $null
+            foreach ($m in $matches) {
+                if ((Get-NormalizedSoftwareName ([string]$m.DisplayName)) -ne $expectedNorm) { continue }
+                $iv = Convert-AppVersionObject ([string]$m.DisplayVersion)
+                if (-not $iv) { continue }
+                if (-not $best -or $iv -gt $best.VersionObject) {
+                    $best = [pscustomobject]@{ Item=$m; VersionObject=$iv }
+                }
             }
 
-            if ($obj.Result -eq 'Instalado') {
-                Write-Log "RESULTADO: Instalado (deteccao OK)"
-            } else {
-                Write-Log "RESULTADO: Nao detectado."
+            $detected = $false
+            if ($best -and $expectedVer -and $best.VersionObject -ge $expectedVer) { $detected = $true }
+
+            if ($detected) {
+                $found = $best.Item
+                Write-Log "[DETECTION DIRECT] RESULTADO: DETECTADO | DisplayName='$($found.DisplayName)' | DisplayVersion='$($found.DisplayVersion)' | Escopo='$($found.Escopo)'"
+                [System.Windows.Forms.MessageBox]::Show(
+                    "DETECTADO`n`nAplicacao: $($found.DisplayName)`nVersao instalada: $($found.DisplayVersion)`nVersao minima: $realVersion`nRegistro: $($found.Escopo)`n`nMetodo: Registry remoto direto (sem Run Script/payload).",
+                    "Teste de Deteccao - OK", 'OK', 'Information') | Out-Null
+            }
+            else {
+                $foundText = if ($best) { "$($best.Item.DisplayName) $($best.Item.DisplayVersion)" } elseif ($matches.Count -gt 0) { ($matches | ForEach-Object { "$($_.DisplayName) $($_.DisplayVersion)" }) -join "`n" } else { 'Nenhuma correspondencia encontrada.' }
+                Write-Log "[DETECTION DIRECT] RESULTADO: NAO DETECTADO. Encontrado: $foundText"
+                [System.Windows.Forms.MessageBox]::Show(
+                    "NAO DETECTADO`n`nEsperado: $realName >= $realVersion`n`nEncontrado:`n$foundText`n`nMetodo: Registry remoto direto (sem Run Script/payload).",
+                    "Teste de Deteccao", 'OK', 'Warning') | Out-Null
             }
         }
         else {
             $script:DetectionText = Build-CurrentDetectionText
             if (-not $script:DetectionText) { return }
-
-            Write-Log "Sem maquina teste conectada via SCCM - executando script de deteccao LOCALMENTE neste computador ($env:COMPUTERNAME)."
+            Write-Log "Sem maquina teste conectada - executando script de deteccao LOCALMENTE neste computador ($env:COMPUTERNAME)."
             $resultado = Invoke-Expression $script:DetectionText
-
             if (($resultado | Out-String).Trim() -eq 'Instalado') {
                 Write-Log "RESULTADO: Instalado (deteccao OK)"
-            }
-            else {
+                [System.Windows.Forms.MessageBox]::Show("DETECTADO localmente.","Teste de Deteccao",'OK','Information') | Out-Null
+            } else {
                 Write-Log "RESULTADO: Nao detectado. Retorno: $(($resultado | Out-String).Trim())"
+                [System.Windows.Forms.MessageBox]::Show("NAO DETECTADO localmente.","Teste de Deteccao",'OK','Warning') | Out-Null
             }
         }
     }
-    catch { Write-Log "Erro ao rodar deteccao: $($_.Exception.Message)" }
+    catch {
+        Write-Log "Erro ao rodar deteccao: $($_.Exception.Message)"
+        [System.Windows.Forms.MessageBox]::Show("Erro no teste de deteccao:`n`n$($_.Exception.Message)","Erro",'OK','Error') | Out-Null
+    }
 })
 
 $btnCreate.Add_Click({
