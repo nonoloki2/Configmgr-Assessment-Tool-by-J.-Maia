@@ -439,7 +439,7 @@ function Get-CMAppCreatorHelperScriptText {
     return @'
 param(
     [Parameter(Mandatory=$true)]
-    [ValidateSet('Ping','RunSourceScript','InventoryInstalledSoftware','FindExecutable','RunRegistryDetection','RunFileDetection')]
+    [ValidateSet('Ping','RunSourceScript','InventoryInstalledSoftware','SearchInstalledSoftware','FindExecutable','RunRegistryDetection','RunFileDetection')]
     [string]$Action,
 
     [string]$SourcePath = '',
@@ -602,6 +602,70 @@ switch ($Action) {
         } | ConvertTo-Json -Compress
     }
 
+    'SearchInstalledSoftware' {
+        # Motor baseado no Uninstall String Tool: procura SOMENTE pelo nome
+        # solicitado e devolve somente os matches relevantes do registro.
+        if ([string]::IsNullOrWhiteSpace($DisplayNamePattern)) { throw 'DisplayNamePattern nao informado.' }
+
+        function Normalize-AppName([string]$Value) {
+            if ([string]::IsNullOrWhiteSpace($Value)) { return '' }
+            return (($Value.ToLowerInvariant()) -replace '[^a-z0-9]', '')
+        }
+
+        $wanted = Normalize-AppName $DisplayNamePattern
+        $matches = New-Object System.Collections.Generic.List[object]
+
+        $targets = @(
+            [PSCustomObject]@{ Path='HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*'; Scope='Maquina HKLM 64-bit' },
+            [PSCustomObject]@{ Path='HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'; Scope='Maquina HKLM 32-bit' }
+        )
+
+        try {
+            if (-not (Get-PSDrive -Name HKU -ErrorAction SilentlyContinue)) {
+                New-PSDrive -Name HKU -PSProvider Registry -Root Registry::HKEY_USERS -ErrorAction SilentlyContinue | Out-Null
+            }
+            $userHives = Get-ChildItem -Path 'HKU:\' -ErrorAction SilentlyContinue |
+                Where-Object { $_.PSChildName -match '^S-1-5-21-[\d-]+$' }
+            foreach ($hive in $userHives) {
+                $targets += [PSCustomObject]@{
+                    Path  = "HKU:\$($hive.PSChildName)\Software\Microsoft\Windows\CurrentVersion\Uninstall\*"
+                    Scope = "Usuario $($hive.PSChildName)"
+                }
+            }
+        } catch { }
+
+        foreach ($target in $targets) {
+            $entries = Get-ItemProperty -Path $target.Path -ErrorAction SilentlyContinue
+            foreach ($entry in $entries) {
+                if ([string]::IsNullOrWhiteSpace([string]$entry.DisplayName)) { continue }
+                $actual = Normalize-AppName ([string]$entry.DisplayName)
+                if ([string]::IsNullOrWhiteSpace($actual)) { continue }
+                if ($actual -notlike "*$wanted*" -and $wanted -notlike "*$actual*") { continue }
+
+                $rank = 3
+                if ($actual -eq $wanted) { $rank = 0 }
+                elseif ($actual.StartsWith($wanted)) { $rank = 1 }
+                elseif ($actual.Contains($wanted)) { $rank = 2 }
+
+                $matches.Add([PSCustomObject]@{
+                    DisplayName          = [string]$entry.DisplayName
+                    DisplayVersion       = [string]$entry.DisplayVersion
+                    Publisher            = [string]$entry.Publisher
+                    InstallLocation      = [string]$entry.InstallLocation
+                    UninstallString      = [string]$entry.UninstallString
+                    QuietUninstallString = [string]$entry.QuietUninstallString
+                    RegistryPath         = [string]$entry.PSPath
+                    Escopo               = [string]$target.Scope
+                    MatchRank            = $rank
+                    LengthDelta          = [Math]::Abs($actual.Length - $wanted.Length)
+                })
+            }
+        }
+
+        $orderedMatches = @($matches | Sort-Object MatchRank, LengthDelta, DisplayName | Select-Object -First 25)
+        ConvertTo-Json -InputObject $orderedMatches -Compress -Depth 4
+    }
+
     'InventoryInstalledSoftware' {
         # Uninstall nativo (64-bit) e WOW6432Node (apps 32-bit em SO 64-bit).
         $paths = @(
@@ -680,7 +744,7 @@ switch ($Action) {
 
 function Ensure-CMAppCreatorHelperScript {
     param(
-        [string]$ScriptName = 'SCCM-AppCreator-SystemHelper-v3'
+        [string]$ScriptName = 'SCCM-AppCreator-SystemHelper-v4-RegistrySearch'
     )
 
     try {
@@ -839,7 +903,7 @@ function Wait-CMScriptResult {
 function Invoke-CMSystemAction {
     param(
         [Parameter(Mandatory)][string]$ComputerName,
-        [Parameter(Mandatory)][ValidateSet('Ping','RunSourceScript','InventoryInstalledSoftware','FindExecutable','RunRegistryDetection','RunFileDetection')][string]$Action,
+        [Parameter(Mandatory)][ValidateSet('Ping','RunSourceScript','InventoryInstalledSoftware','SearchInstalledSoftware','FindExecutable','RunRegistryDetection','RunFileDetection')][string]$Action,
         [string]$SourcePath,
         [PSCustomObject]$ScriptInfo,
         [string]$NamePattern,
@@ -880,6 +944,10 @@ function Invoke-CMSystemAction {
         if ([string]::IsNullOrWhiteSpace($NamePattern)) { throw 'Padrao de nome de arquivo nao informado.' }
         $params.NamePattern = $NamePattern
         if (-not [string]::IsNullOrWhiteSpace($ExtraRoots)) { $params.ExtraRoots = $ExtraRoots }
+    }
+    elseif ($Action -eq 'SearchInstalledSoftware') {
+        if ([string]::IsNullOrWhiteSpace($DisplayNamePattern)) { throw 'Nome da aplicacao nao informado para pesquisa no registro.' }
+        $params.DisplayNamePattern = $DisplayNamePattern
     }
     elseif ($Action -eq 'RunRegistryDetection') {
         if ([string]::IsNullOrWhiteSpace($DisplayNamePattern)) { throw 'Padrao de DisplayName nao informado.' }
@@ -980,6 +1048,47 @@ function Get-NormalizedSoftwareName {
     param([string]$Name)
     if ([string]::IsNullOrWhiteSpace($Name)) { return '' }
     return (($Name.ToLowerInvariant()) -replace '[^a-z0-9]', '')
+}
+
+function Get-SilentUninstallSuggestion {
+    <#
+        Motor reaproveitado do Uninstall String Tool.ps1.
+        Prioridade: QuietUninstallString > MSI normalizado > string ja silenciosa > heuristicas comuns.
+    #>
+    param(
+        [string]$UninstallString,
+        [string]$QuietUninstallString
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($QuietUninstallString)) {
+        return $QuietUninstallString.Trim()
+    }
+    if ([string]::IsNullOrWhiteSpace($UninstallString)) { return $null }
+
+    $us = $UninstallString.Trim()
+
+    if ($us -match '(?i)msiexec' -and $us -match '(\{[0-9A-Fa-f-]{36}\})') {
+        return "msiexec.exe /x $($Matches[1]) /qn /norestart"
+    }
+
+    $knownSilent = @('/S','/silent','/verysilent','/qn','/quiet','-silent','--silent')
+    foreach ($sw in $knownSilent) {
+        if ($us -match [regex]::Escape($sw)) { return $us }
+    }
+
+    $exePath = $null
+    if ($us -match '^\s*"([^"]+)"') { $exePath = $Matches[1] }
+    elseif ($us -match '^\s*(\S+\.exe)') { $exePath = $Matches[1] }
+
+    if (-not $exePath) { return $us }
+
+    $exeName = [IO.Path]::GetFileName($exePath).ToLowerInvariant()
+    switch -Regex ($exeName) {
+        'unins\d*\.exe'  { return ('"' + $exePath + '" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART') }
+        'uninstall\.exe' { return ('"' + $exePath + '" /S') }
+        'setup\.exe'     { return ('"' + $exePath + '" /S') }
+        default          { return $us }
+    }
 }
 
 function Resolve-InstalledSoftwareByApplicationName {
@@ -1181,8 +1290,9 @@ $script:EffectiveSourcePath = $null # caminho usado de fato para ler arquivos (U
 $script:OriginalSourcePath  = $null # caminho UNC real, sempre usado no -ContentLocation do SCCM
 $script:DetectionMode     = 'Registry'  # 'Registry' ou 'File'
 $script:DetectionFilePath = $null       # caminho do executavel, quando DetectionMode = 'File'
-$script:DetectedRegistryApp = $null      # entrada real descoberta automaticamente na maquina teste
-$script:BuildId = '2026.08.26-REBUILT-STABLE-SOURCEFIX5'
+$script:DetectedRegistryApp = $null
+$script:DetectedRegistryUninstallCommand = $null      # entrada real descoberta automaticamente na maquina teste
+$script:BuildId = '2026.08.26-REGISTRY-UNINSTALL-ENGINE1'
 
 # ----------------------------------------------------------------------------
 # GUI
@@ -1257,6 +1367,7 @@ $grpApp.Controls.Add($txtAppName)
 $txtAppName.Add_TextChanged({
     if ($script:DetectedRegistryApp) {
         $script:DetectedRegistryApp = $null
+$script:DetectedRegistryUninstallCommand = $null
         $script:DetectionText = $null
         $txtVersion.Text = ''
         $txtDetectPattern.Text = ''
@@ -1270,6 +1381,7 @@ $txtAppName.Add_TextChanged({
 $txtAppName.Add_TextChanged({
     if ($script:DetectionMode -eq 'Registry') {
         $script:DetectedRegistryApp = $null
+$script:DetectedRegistryUninstallCommand = $null
         $script:DetectionText = $null
         $txtDetectPattern.Text = ''
         $txtVersion.Text = ''
@@ -1795,7 +1907,7 @@ $btnDetectRegistry.Add_Click({
     $status = $null
     $erro = $null
     try {
-        $status = Invoke-CMSystemAction -ComputerName $script:RemoteTestComputer -Action InventoryInstalledSoftware -TimeoutSeconds 120
+        $status = Invoke-CMSystemAction -ComputerName $script:RemoteTestComputer -Action SearchInstalledSoftware -DisplayNamePattern $appSearchName -TimeoutSeconds 120
     }
     catch { $erro = $_.Exception.Message }
     finally {
@@ -1810,7 +1922,7 @@ $btnDetectRegistry.Add_Click({
     }
 
     $raw = [string]$status.ScriptOutput
-    Write-Log "[AUTO] Run Script concluido. Tamanho do ScriptOutput: $($raw.Length) caractere(s)."
+    Write-Log "[AUTO] Pesquisa dirigida no registro concluida. Tamanho do ScriptOutput: $($raw.Length) caractere(s)."
     if ([string]::IsNullOrWhiteSpace($raw)) {
         Write-Log "A execucao terminou sem ScriptOutput utilizavel (isso nao deve mais ocorrer apos o novo sincronismo)."
         [System.Windows.Forms.MessageBox]::Show("A maquina teste nao retornou nenhum dado. Verifique se o cliente SCCM esta online.", "Aviso") | Out-Null
@@ -1819,7 +1931,7 @@ $btnDetectRegistry.Add_Click({
 
     try { $json = $raw | ConvertFrom-Json -ErrorAction Stop }
     catch {
-        Write-Log "Falha ao interpretar o retorno JSON do inventario: $($_.Exception.Message)"
+        Write-Log "Falha ao interpretar o retorno JSON da pesquisa de registro: $($_.Exception.Message)"
         [System.Windows.Forms.MessageBox]::Show("A resposta da maquina teste nao pode ser lida como JSON.`n`nRetorno bruto:`n$raw", "Erro ao interpretar resposta", 'OK', 'Error') | Out-Null
         return
     }
@@ -1828,6 +1940,7 @@ $btnDetectRegistry.Add_Click({
     $selecionado = Resolve-InstalledSoftwareByApplicationName -Items @($json) -ApplicationName $appSearchName
     if (-not $selecionado) {
         $script:DetectedRegistryApp = $null
+$script:DetectedRegistryUninstallCommand = $null
         Write-Log "[AUTO] Nenhuma entrada com DisplayVersion encontrada para '$appSearchName'."
         [System.Windows.Forms.MessageBox]::Show(
             "Nao encontrei '$appSearchName' no registro da maquina teste.`n`nA busca ignorou espacos/hifens e verificou HKLM 64-bit, WOW6432Node e perfis de usuario carregados.",
@@ -1842,6 +1955,14 @@ $btnDetectRegistry.Add_Click({
         $txtPublisher.Text = [string]$selecionado.Publisher
     }
 
+    # Aproveita o mesmo registro para descobrir a melhor linha de uninstall silencioso.
+    $script:DetectedRegistryUninstallCommand = Get-SilentUninstallSuggestion `
+        -UninstallString ([string]$selecionado.UninstallString) `
+        -QuietUninstallString ([string]$selecionado.QuietUninstallString)
+    if (-not [string]::IsNullOrWhiteSpace($script:DetectedRegistryUninstallCommand)) {
+        $txtUninstallCmd.Text = $script:DetectedRegistryUninstallCommand
+    }
+
     $script:DetectionMode = 'Registry'
     $script:DetectionFilePath = $null
     $lblDetectionMode.Text = "Registro AUTO: $($selecionado.DisplayName) >= $($selecionado.DisplayVersion)"
@@ -1849,7 +1970,14 @@ $btnDetectRegistry.Add_Click({
 
     $script:DetectionText = New-DetectionScriptText -DisplayNamePattern ([string]$selecionado.DisplayName) -MinVersion ([string]$selecionado.DisplayVersion)
 
-    Write-Log "[AUTO] ENCONTRADO: DisplayName='$($selecionado.DisplayName)' | DisplayVersion='$($selecionado.DisplayVersion)' | Publisher='$($selecionado.Publisher)' | Escopo='$($selecionado.Escopo)'"
+    Write-Log "[AUTO] ENCONTRADO: DisplayName='$($selecionado.DisplayName)' | DisplayVersion='$($selecionado.DisplayVersion)' | Publisher='$($selecionado.Publisher)' | Escopo='$($selecionado.Escopo)' | RegistryPath='$($selecionado.RegistryPath)'"
+    Write-Log "[AUTO] UninstallString: $($selecionado.UninstallString)"
+    Write-Log "[AUTO] QuietUninstallString: $($selecionado.QuietUninstallString)"
+    if (-not [string]::IsNullOrWhiteSpace($script:DetectedRegistryUninstallCommand)) {
+        Write-Log "[AUTO] Comando de desinstalacao silenciosa selecionado: $script:DetectedRegistryUninstallCommand"
+    } else {
+        Write-Log "[AUTO] Registro nao forneceu linha de desinstalacao utilizavel; mantendo comando do uninstall da pasta source."
+    }
     Write-Log "[AUTO] Script de Detection Method gerado usando a versao REAL encontrada no registro: $($selecionado.DisplayVersion)."
 
     [System.Windows.Forms.MessageBox]::Show(
@@ -1857,8 +1985,9 @@ $btnDetectRegistry.Add_Click({
         "Nome informado: $appSearchName`n" +
         "DisplayName real: $($selecionado.DisplayName)`n" +
         "Versao encontrada: $($selecionado.DisplayVersion)`n" +
-        "Escopo: $($selecionado.Escopo)`n`n" +
-        "A versao foi lida do registro da maquina teste; ela NAO foi usada para localizar a aplicacao.",
+        "Escopo: $($selecionado.Escopo)`n" +
+        "Uninstall silencioso: $(if ($script:DetectedRegistryUninstallCommand) { $script:DetectedRegistryUninstallCommand } else { '(nao encontrado - usando uninstall da source)' })`n`n" +
+        "A versao e a linha de uninstall foram lidas do registro da maquina teste; a versao NAO foi usada para localizar a aplicacao.",
         "Deteccao automatica concluida", 'OK', 'Information') | Out-Null
 })
 
@@ -1990,6 +2119,7 @@ $btnClearFileDetection.Add_Click({
     $script:DetectionMode = 'Registry'
     $script:DetectionFilePath = $null
     $script:DetectedRegistryApp = $null
+$script:DetectedRegistryUninstallCommand = $null
     $script:DetectionText = $null
     $txtDetectPattern.Text = ''
     $txtVersion.Text = ''
@@ -2228,7 +2358,7 @@ $btnCreate.Add_Click({
         -Version $txtVersion.Text `
         -SourceFolder $script:OriginalSourcePath `
         -InstallCommand $script:InstallInfo.Comando `
-        -UninstallCommand $script:UninstallInfo.Comando `
+        -UninstallCommand $(if (-not [string]::IsNullOrWhiteSpace($script:DetectedRegistryUninstallCommand)) { $script:DetectedRegistryUninstallCommand } else { $script:UninstallInfo.Comando }) `
         -DetectionScript $script:DetectionText
 
     if ($result.Sucesso) {
