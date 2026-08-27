@@ -356,6 +356,72 @@ foreach (`$app in (Get-ItemProperty -Path `$uninstallPaths -ErrorAction Silently
 }
 
 
+function New-ExactRegistryDetectionScriptText {
+    <#
+        Detection Method FINAL: usa a chave EXATA descoberta na maquina teste.
+        Nao varre todo o Uninstall durante a avaliacao do SCCM.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$DisplayName,
+        [Parameter(Mandatory)][string]$MinVersion,
+        [Parameter(Mandatory)][string]$RegistrySubKey,
+        [Parameter(Mandatory)][ValidateSet('HKLM','HKU')][string]$RegistryHive,
+        [ValidateSet('32','64','Default')][string]$RegistryView = 'Default'
+    )
+
+    $safeName    = $DisplayName.Replace("'", "''")
+    $safeVersion = $MinVersion.Replace("'", "''")
+    $safeSubKey  = $RegistrySubKey.Replace("'", "''")
+
+    return @"
+`$ErrorActionPreference = 'SilentlyContinue'
+`$expectedName = '$safeName'
+`$expectedVersionText = '$safeVersion'
+`$subKey = '$safeSubKey'
+`$hive = '$RegistryHive'
+`$view = '$RegistryView'
+
+function Convert-AppVersion([string]`$Text) {
+    if ([string]::IsNullOrWhiteSpace(`$Text)) { return `$null }
+    `$m = [regex]::Match(`$Text, '\d+(?:\.\d+){0,3}')
+    if (-not `$m.Success) { return `$null }
+    `$parts = @(`$m.Value.Split('.') | ForEach-Object { [int]`$_ })
+    while (`$parts.Count -lt 4) { `$parts += 0 }
+    try { return [version]::new(`$parts[0],`$parts[1],`$parts[2],`$parts[3]) } catch { return `$null }
+}
+
+`$baseHive = if (`$hive -eq 'HKLM') { [Microsoft.Win32.RegistryHive]::LocalMachine } else { [Microsoft.Win32.RegistryHive]::Users }
+`$registryView = switch (`$view) {
+    '32' { [Microsoft.Win32.RegistryView]::Registry32 }
+    '64' { [Microsoft.Win32.RegistryView]::Registry64 }
+    default { [Microsoft.Win32.RegistryView]::Default }
+}
+
+try {
+    `$baseKey = [Microsoft.Win32.RegistryKey]::OpenBaseKey(`$baseHive, `$registryView)
+    try {
+        `$key = `$baseKey.OpenSubKey(`$subKey)
+        if (-not `$key) { exit 0 }
+        try {
+            `$name = [string]`$key.GetValue('DisplayName', '')
+            `$installedVersionText = [string]`$key.GetValue('DisplayVersion', '')
+        }
+        finally { `$key.Dispose() }
+    }
+    finally { `$baseKey.Dispose() }
+}
+catch { exit 0 }
+
+if (`$name -ne `$expectedName) { exit 0 }
+`$installed = Convert-AppVersion `$installedVersionText
+`$minimum = Convert-AppVersion `$expectedVersionText
+if (`$installed -and `$minimum -and `$installed -ge `$minimum) {
+    Write-Output 'Instalado'
+}
+"@
+}
+
+
 function New-FileDetectionScriptText {
     <#
         Gera o TEXTO do script de deteccao baseado na EXISTENCIA (e
@@ -1149,6 +1215,9 @@ function Get-InstalledProgramsRemote {
                     QuietUninstallString = Get-RemoteRegistryStringValue -CimSession $session -Hive ([uint32]$loc.Hive) -SubKey $sub -ValueName 'QuietUninstallString'
                     WindowsInstaller     = Get-RemoteRegistryDwordValue -CimSession $session -Hive ([uint32]$loc.Hive) -SubKey $sub -ValueName 'WindowsInstaller'
                     RegistryKeyName      = [string]$child
+                    RegistrySubKey       = [string]$sub
+                    RegistryHive         = if ([uint32]$loc.Hive -eq 2147483650) { 'HKLM' } else { 'HKU' }
+                    RegistryView         = if ([string]$loc.Scope -eq 'HKLM 32-bit') { '32' } elseif ([string]$loc.Scope -eq 'HKLM 64-bit') { '64' } else { 'Default' }
                     RegistryPath         = "$($loc.Scope):\$sub"
                     Escopo               = [string]$loc.Scope
                 }
@@ -1408,7 +1477,7 @@ $script:DetectionMode     = 'Registry'  # 'Registry' ou 'File'
 $script:DetectionFilePath = $null       # caminho do executavel, quando DetectionMode = 'File'
 $script:DetectedRegistryApp = $null      # entrada real descoberta automaticamente na maquina teste
 $script:RegistryUninstallCommand = $null  # uninstall silencioso vindo do registro; source e fallback
-$script:BuildId = '2026.08.26-DIRECT-REGISTRY-ENGINE6'
+$script:BuildId = '2026.08.26-SCCM-CREATOR-FINAL2'
 
 # ----------------------------------------------------------------------------
 # GUI
@@ -1710,35 +1779,23 @@ $txtUninstallCmd.Size = New-Object System.Drawing.Size(670, 20)
 $txtUninstallCmd.ReadOnly = $true
 $grpCmds.Controls.Add($txtUninstallCmd)
 
-# --- Grupo: Testes (local ou remoto, dependendo da sessao) ---
+# --- Grupo: Deteccao e Criacao ---
 $grpTest = New-Object System.Windows.Forms.GroupBox
-$grpTest.Text = "5. Testes (local por padrao, ou na maquina remota se conectada acima)"
+$grpTest.Text = "5. Deteccao e Criacao da Aplicacao"
 $grpTest.Location = New-Object System.Drawing.Point(10, 635)
 $grpTest.Size = New-Object System.Drawing.Size(690, 60)
 $form.Controls.Add($grpTest)
 
-$btnTestInstall = New-Object System.Windows.Forms.Button
-$btnTestInstall.Text = "Testar Instalacao"
-$btnTestInstall.Location = New-Object System.Drawing.Point(10, 22)
-$btnTestInstall.Size = New-Object System.Drawing.Size(140, 25)
-$grpTest.Controls.Add($btnTestInstall)
-
-$btnTestUninstall = New-Object System.Windows.Forms.Button
-$btnTestUninstall.Text = "Testar Desinstalacao"
-$btnTestUninstall.Location = New-Object System.Drawing.Point(160, 22)
-$btnTestUninstall.Size = New-Object System.Drawing.Size(140, 25)
-$grpTest.Controls.Add($btnTestUninstall)
-
 $btnTestDetection = New-Object System.Windows.Forms.Button
 $btnTestDetection.Text = "Testar Deteccao"
-$btnTestDetection.Location = New-Object System.Drawing.Point(310, 22)
-$btnTestDetection.Size = New-Object System.Drawing.Size(140, 25)
+$btnTestDetection.Location = New-Object System.Drawing.Point(10, 22)
+$btnTestDetection.Size = New-Object System.Drawing.Size(180, 25)
 $grpTest.Controls.Add($btnTestDetection)
 
 $btnCreate = New-Object System.Windows.Forms.Button
-$btnCreate.Text = "Criar Aplicacao no SCCM"
-$btnCreate.Location = New-Object System.Drawing.Point(470, 20)
-$btnCreate.Size = New-Object System.Drawing.Size(210, 30)
+$btnCreate.Text = "CRIAR APLICACAO NO SCCM"
+$btnCreate.Location = New-Object System.Drawing.Point(205, 20)
+$btnCreate.Size = New-Object System.Drawing.Size(475, 30)
 $btnCreate.BackColor = [System.Drawing.Color]::LightGreen
 $grpTest.Controls.Add($btnCreate)
 
@@ -2083,6 +2140,7 @@ $btnDetectRegistry.Add_Click({
     $script:DetectionText = New-DetectionScriptText -DisplayNamePattern ([string]$selecionado.DisplayName) -MinVersion ([string]$selecionado.DisplayVersion)
 
     Write-Log "[REGISTRY DIRECT] ENCONTRADO: DisplayName='$($selecionado.DisplayName)' | DisplayVersion='$($selecionado.DisplayVersion)' | Publisher='$($selecionado.Publisher)' | Escopo='$($selecionado.Escopo)'"
+    Write-Log "[REGISTRY DIRECT] CHAVE EXATA PARA DETECCAO: $($selecionado.RegistryPath)"
     Write-Log "[REGISTRY DIRECT] UninstallString='$($selecionado.UninstallString)'"
     if ($selecionado.QuietUninstallString) { Write-Log "[REGISTRY DIRECT] QuietUninstallString='$($selecionado.QuietUninstallString)'" }
 
@@ -2233,166 +2291,6 @@ $btnClearFileDetection.Add_Click({
     Write-Log "Modo de deteccao voltou para Registro automatico pelo Nome da Aplicacao."
 })
 
-$btnTestInstall.Add_Click({
-    if (-not $script:InstallInfo -or -not $script:InstallInfo.Encontrado) {
-        [System.Windows.Forms.MessageBox]::Show("Escaneie a pasta primeiro.", "Aviso") | Out-Null
-        return
-    }
-    try {
-        if ($script:RemoteTestConnected -and $script:RemoteTestComputer) {
-            Write-Log "Executando instalacao de teste em $($script:RemoteTestComputer) via SCCM como SYSTEM..."
-            Write-Log "A origem usada remotamente sera: $($script:OriginalSourcePath)"
-            $output = Invoke-RemoteScriptAction -ComputerName $script:RemoteTestComputer -SourceFolder $script:OriginalSourcePath -ScriptInfo $script:InstallInfo
-            Write-Log "  [SCCM/SYSTEM] $output"
-        }
-        else {
-            $confirmLocal = [System.Windows.Forms.MessageBox]::Show(
-                "ATENCAO: nao ha nenhuma maquina teste conectada via SCCM (grupo 3).`n`n" +
-                "Isso vai executar '$($script:InstallInfo.Arquivo)' AQUI NESTE COMPUTADOR " +
-                "($env:COMPUTERNAME) - que pode ser o proprio servidor do SCCM ou a estacao onde " +
-                "voce esta rodando esta ferramenta.`n`n" +
-                "Tem certeza que quer instalar LOCALMENTE neste computador?",
-                "Confirmar execucao LOCAL (sem maquina teste conectada)",
-                [System.Windows.Forms.MessageBoxButtons]::YesNo,
-                [System.Windows.Forms.MessageBoxIcon]::Warning,
-                [System.Windows.Forms.MessageBoxDefaultButton]::Button2
-            )
-            if ($confirmLocal -ne 'Yes') {
-                Write-Log "Instalacao local cancelada pelo usuario (nenhuma maquina teste conectada)."
-                return
-            }
-
-            if (-not $script:EffectiveSourcePath) {
-                throw "A pasta foi apenas inventariada pela sessao interativa. Para teste local, use uma conta com acesso direto ao UNC ou teste na maquina remota via SCCM/SYSTEM."
-            }
-            Write-Log "Executando instalacao de teste LOCALMENTE em: $($script:EffectiveSourcePath) (computador: $env:COMPUTERNAME)"
-            Push-Location $script:EffectiveSourcePath
-            if ($script:InstallInfo.Tipo -eq 'PowerShell') {
-                & powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\$($script:InstallInfo.Arquivo)"
-            } else {
-                & cmd.exe /c ".\$($script:InstallInfo.Arquivo)"
-            }
-            Pop-Location
-        }
-        Write-Log "Instalacao de teste finalizada."
-    }
-    catch { Write-Log "Erro na instalacao de teste: $($_.Exception.Message)" }
-})
-
-$btnTestUninstall.Add_Click({
-    try {
-        if ($script:RemoteTestConnected -and $script:RemoteTestComputer -and
-            -not [string]::IsNullOrWhiteSpace($script:RegistryUninstallCommand) -and
-            $script:DetectedRegistryApp) {
-
-            $computer = $script:RemoteTestComputer
-            $cmd = $script:RegistryUninstallCommand
-            $appName = [string]$script:DetectedRegistryApp.DisplayName
-
-            $confirm = [System.Windows.Forms.MessageBox]::Show(
-                "Executar a desinstalacao silenciosa DIRETAMENTE em $computer?`n`nAplicacao:`n$appName`n`nComando:`n$cmd`n`nA ferramenta vai executar via WMI/DCOM e depois consultar o registro novamente para confirmar a remocao.",
-                "Confirmar desinstalacao remota",
-                [System.Windows.Forms.MessageBoxButtons]::YesNo,
-                [System.Windows.Forms.MessageBoxIcon]::Warning,
-                [System.Windows.Forms.MessageBoxDefaultButton]::Button2
-            )
-            if ($confirm -ne 'Yes') {
-                Write-Log "[UNINSTALL DIRECT] Cancelado pelo usuario."
-                return
-            }
-
-            Write-Log "[UNINSTALL DIRECT] Executando em $computer via WMI/DCOM. SEM Run Script, SEM payload."
-            Write-Log "[UNINSTALL DIRECT] Comando: $cmd"
-            $btnTestUninstall.Enabled = $false
-            $form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
-            [System.Windows.Forms.Application]::DoEvents()
-
-            $run = Invoke-RemoteCommandDirect -ComputerName $computer -CommandLine $cmd -TimeoutSeconds 180
-            Write-Log "[UNINSTALL DIRECT] $($run.Mensagem)"
-
-            if (-not $run.Sucesso) {
-                [System.Windows.Forms.MessageBox]::Show(
-                    "A execucao remota nao foi concluida.`n`n$($run.Mensagem)",
-                    "Falha na desinstalacao", 'OK', 'Error') | Out-Null
-                return
-            }
-
-            # O msiexec pode encerrar o processo pai antes de o Windows Installer
-            # terminar de remover a entrada ARP. Aguarda e valida pelo mesmo motor
-            # DIRECT REGISTRY que ja foi aprovado.
-            Write-Log "[UNINSTALL DIRECT] Processo terminou. Validando remocao no registro..."
-            $removed = $false
-            $lastMatch = $null
-            $verify = [Diagnostics.Stopwatch]::StartNew()
-            while ($verify.Elapsed.TotalSeconds -lt 60) {
-                [System.Windows.Forms.Application]::DoEvents()
-                Start-Sleep -Seconds 2
-                $items = @(Get-InstalledProgramsRemote -ComputerName $computer -Filter $txtAppName.Text.Trim())
-                $lastMatch = Resolve-InstalledSoftwareByApplicationName -Items @($items) -ApplicationName $txtAppName.Text.Trim()
-                if (-not $lastMatch) { $removed = $true; break }
-            }
-
-            if ($removed) {
-                Write-Log "[UNINSTALL DIRECT] RESULTADO: REMOVIDO. A entrada nao existe mais no registro."
-                [System.Windows.Forms.MessageBox]::Show(
-                    "DESINSTALACAO CONFIRMADA`n`nAplicacao: $appName`nMaquina: $computer`n`nA entrada nao existe mais no registro remoto.",
-                    "Desinstalacao concluida", 'OK', 'Information') | Out-Null
-            }
-            else {
-                $still = if ($lastMatch) { "$($lastMatch.DisplayName) $($lastMatch.DisplayVersion)" } else { $appName }
-                Write-Log "[UNINSTALL DIRECT] RESULTADO: AINDA INSTALADO apos a verificacao. $still"
-                [System.Windows.Forms.MessageBox]::Show(
-                    "O comando remoto terminou, mas o aplicativo AINDA ESTA INSTALADO.`n`nEncontrado: $still`n`nIsso significa que a linha de uninstall nao removeu o produto, ou que o Windows Installer ainda nao concluiu a remocao.",
-                    "Desinstalacao nao confirmada", 'OK', 'Warning') | Out-Null
-            }
-            return
-        }
-
-        # Fallback antigo somente quando nao existe uma linha silenciosa vinda do registro.
-        if (-not $script:UninstallInfo -or -not $script:UninstallInfo.Encontrado) {
-            [System.Windows.Forms.MessageBox]::Show("Nao ha linha silenciosa detectada nem uninstall da pasta source.", "Aviso") | Out-Null
-            return
-        }
-
-        if ($script:RemoteTestConnected -and $script:RemoteTestComputer) {
-            [System.Windows.Forms.MessageBox]::Show(
-                "Nao foi encontrada uma linha silenciosa confiavel no registro.`n`nPor seguranca, esta build NAO vai voltar automaticamente ao Run Script/payload para testar uninstall.bat.`n`nUse a linha silenciosa detectada ou ajuste o uninstall da aplicacao.",
-                "Uninstall remoto nao disponivel", 'OK', 'Warning') | Out-Null
-            Write-Log "[UNINSTALL DIRECT] Sem RegistryUninstallCommand; fallback remoto por Run Script foi bloqueado."
-            return
-        }
-
-        $confirmLocal = [System.Windows.Forms.MessageBox]::Show(
-            "ATENCAO: nenhuma maquina teste remota esta conectada.`n`nExecutar '$($script:UninstallInfo.Arquivo)' LOCALMENTE em $env:COMPUTERNAME?",
-            "Confirmar execucao LOCAL",
-            [System.Windows.Forms.MessageBoxButtons]::YesNo,
-            [System.Windows.Forms.MessageBoxIcon]::Warning,
-            [System.Windows.Forms.MessageBoxDefaultButton]::Button2
-        )
-        if ($confirmLocal -ne 'Yes') { return }
-        if (-not $script:EffectiveSourcePath) { throw "Pasta source nao acessivel localmente." }
-
-        Push-Location $script:EffectiveSourcePath
-        try {
-            if ($script:UninstallInfo.Tipo -eq 'PowerShell') {
-                & powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\$($script:UninstallInfo.Arquivo)"
-            } else {
-                & cmd.exe /c ".\$($script:UninstallInfo.Arquivo)"
-            }
-        }
-        finally { Pop-Location }
-        Write-Log "Desinstalacao local finalizada."
-    }
-    catch {
-        Write-Log "Erro na desinstalacao de teste: $($_.Exception.Message)"
-        [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, "Erro na desinstalacao", 'OK', 'Error') | Out-Null
-    }
-    finally {
-        $btnTestUninstall.Enabled = $true
-        $form.Cursor = [System.Windows.Forms.Cursors]::Default
-    }
-})
-
 function Build-CurrentDetectionText {
     <#
         Registro: usa EXCLUSIVAMENTE a entrada que foi descoberta na maquina
@@ -2418,6 +2316,14 @@ function Build-CurrentDetectionText {
     # posterior altere silenciosamente o Detection Method.
     $txtDetectPattern.Text = $realName
     $txtVersion.Text = $realVersion
+    if ($script:DetectedRegistryApp.RegistrySubKey -and $script:DetectedRegistryApp.RegistryHive) {
+        return New-ExactRegistryDetectionScriptText `
+            -DisplayName $realName `
+            -MinVersion $realVersion `
+            -RegistrySubKey ([string]$script:DetectedRegistryApp.RegistrySubKey) `
+            -RegistryHive ([string]$script:DetectedRegistryApp.RegistryHive) `
+            -RegistryView ([string]$script:DetectedRegistryApp.RegistryView)
+    }
     return New-DetectionScriptText -DisplayNamePattern $realName -MinVersion $realVersion
 }
 
@@ -2542,7 +2448,7 @@ $btnCreate.Add_Click({
     $descricaoDeteccao = if ($script:DetectionMode -eq 'File') {
         "Arquivo: $($script:DetectionFilePath)"
     } else {
-        "Registro AUTO: DisplayName='$($script:DetectedRegistryApp.DisplayName)', versao encontrada=$($script:DetectedRegistryApp.DisplayVersion)"
+        "Registro EXATO: $($script:DetectedRegistryApp.RegistryPath) | DisplayName='$($script:DetectedRegistryApp.DisplayName)' | DisplayVersion >= $($script:DetectedRegistryApp.DisplayVersion)"
     }
 
     $confirm = [System.Windows.Forms.MessageBox]::Show(
