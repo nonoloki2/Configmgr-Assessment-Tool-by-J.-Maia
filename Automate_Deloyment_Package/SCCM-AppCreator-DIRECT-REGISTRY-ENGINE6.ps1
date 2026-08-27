@@ -1027,6 +1027,71 @@ function Get-RemoteRegistrySubKeys {
     return @()
 }
 
+
+function Invoke-RemoteCommandDirect {
+    <#
+        Executa uma linha de comando diretamente na maquina teste via WMI/DCOM
+        (Win32_Process.Create). Nao usa SCCM Run Script, ScriptOutput ou payload.
+        Mantem a GUI responsiva enquanto aguarda o processo remoto terminar.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$ComputerName,
+        [Parameter(Mandatory)][string]$CommandLine,
+        [int]$TimeoutSeconds = 180
+    )
+
+    $session = $null
+    try {
+        $opt = New-CimSessionOption -Protocol Dcom
+        $session = New-CimSession -ComputerName $ComputerName -SessionOption $opt -OperationTimeoutSec 15 -ErrorAction Stop
+
+        $cmd = $CommandLine.Trim()
+        if ([string]::IsNullOrWhiteSpace($cmd)) { throw "Linha de comando vazia." }
+
+        # .bat/.cmd e comandos com operadores do shell precisam de cmd.exe.
+        if ($cmd -match '(?i)\.(bat|cmd)(\s|$)' -or $cmd -match '[&|<>]') {
+            $escaped = $cmd.Replace('"','\"')
+            $cmd = 'cmd.exe /d /s /c "' + $escaped + '"'
+        }
+
+        $create = Invoke-CimMethod -CimSession $session -ClassName Win32_Process -MethodName Create `
+            -Arguments @{ CommandLine = $cmd } -ErrorAction Stop
+
+        if ([int]$create.ReturnValue -ne 0) {
+            throw "Win32_Process.Create falhou. ReturnValue=$($create.ReturnValue)"
+        }
+
+        $pid = [int]$create.ProcessId
+        $sw = [Diagnostics.Stopwatch]::StartNew()
+        $timedOut = $false
+
+        while ($sw.Elapsed.TotalSeconds -lt $TimeoutSeconds) {
+            [System.Windows.Forms.Application]::DoEvents()
+            Start-Sleep -Milliseconds 750
+            $proc = Get-CimInstance -CimSession $session -ClassName Win32_Process -Filter "ProcessId = $pid" -ErrorAction SilentlyContinue
+            if (-not $proc) { break }
+        }
+
+        if ($sw.Elapsed.TotalSeconds -ge $TimeoutSeconds) { $timedOut = $true }
+
+        return [pscustomobject]@{
+            Sucesso    = (-not $timedOut)
+            ProcessId  = $pid
+            TimedOut   = $timedOut
+            CommandLine = $cmd
+            Mensagem   = if ($timedOut) { "Processo remoto PID $pid ainda ativo apos $TimeoutSeconds segundos." } else { "Processo remoto PID $pid terminou." }
+        }
+    }
+    catch {
+        return [pscustomobject]@{
+            Sucesso=$false; ProcessId=$null; TimedOut=$false; CommandLine=$CommandLine; Mensagem=$_.Exception.Message
+        }
+    }
+    finally {
+        if ($session) { Remove-CimSession -CimSession $session -ErrorAction SilentlyContinue }
+    }
+}
+
 function Get-InstalledProgramsRemote {
     <#
         Adaptacao REMOTA do motor do "Uninstall String Tool.ps1".
@@ -1343,7 +1408,7 @@ $script:DetectionMode     = 'Registry'  # 'Registry' ou 'File'
 $script:DetectionFilePath = $null       # caminho do executavel, quando DetectionMode = 'File'
 $script:DetectedRegistryApp = $null      # entrada real descoberta automaticamente na maquina teste
 $script:RegistryUninstallCommand = $null  # uninstall silencioso vindo do registro; source e fallback
-$script:BuildId = '2026.08.26-DIRECT-REGISTRY-ENGINE5'
+$script:BuildId = '2026.08.26-DIRECT-REGISTRY-ENGINE6'
 
 # ----------------------------------------------------------------------------
 # GUI
@@ -2215,48 +2280,117 @@ $btnTestInstall.Add_Click({
 })
 
 $btnTestUninstall.Add_Click({
-    if (-not $script:UninstallInfo -or -not $script:UninstallInfo.Encontrado) {
-        [System.Windows.Forms.MessageBox]::Show("Escaneie a pasta primeiro.", "Aviso") | Out-Null
-        return
-    }
     try {
-        if ($script:RemoteTestConnected -and $script:RemoteTestComputer) {
-            Write-Log "Executando desinstalacao de teste em $($script:RemoteTestComputer) via SCCM como SYSTEM..."
-            $output = Invoke-RemoteScriptAction -ComputerName $script:RemoteTestComputer -SourceFolder $script:OriginalSourcePath -ScriptInfo $script:UninstallInfo
-            Write-Log "  [SCCM/SYSTEM] $output"
-        }
-        else {
-            $confirmLocal = [System.Windows.Forms.MessageBox]::Show(
-                "ATENCAO: nao ha nenhuma maquina teste conectada via SCCM (grupo 3).`n`n" +
-                "Isso vai executar '$($script:UninstallInfo.Arquivo)' AQUI NESTE COMPUTADOR " +
-                "($env:COMPUTERNAME) - que pode ser o proprio servidor do SCCM ou a estacao onde " +
-                "voce esta rodando esta ferramenta.`n`n" +
-                "Tem certeza que quer desinstalar LOCALMENTE neste computador?",
-                "Confirmar execucao LOCAL (sem maquina teste conectada)",
+        if ($script:RemoteTestConnected -and $script:RemoteTestComputer -and
+            -not [string]::IsNullOrWhiteSpace($script:RegistryUninstallCommand) -and
+            $script:DetectedRegistryApp) {
+
+            $computer = $script:RemoteTestComputer
+            $cmd = $script:RegistryUninstallCommand
+            $appName = [string]$script:DetectedRegistryApp.DisplayName
+
+            $confirm = [System.Windows.Forms.MessageBox]::Show(
+                "Executar a desinstalacao silenciosa DIRETAMENTE em $computer?`n`nAplicacao:`n$appName`n`nComando:`n$cmd`n`nA ferramenta vai executar via WMI/DCOM e depois consultar o registro novamente para confirmar a remocao.",
+                "Confirmar desinstalacao remota",
                 [System.Windows.Forms.MessageBoxButtons]::YesNo,
                 [System.Windows.Forms.MessageBoxIcon]::Warning,
                 [System.Windows.Forms.MessageBoxDefaultButton]::Button2
             )
-            if ($confirmLocal -ne 'Yes') {
-                Write-Log "Desinstalacao local cancelada pelo usuario (nenhuma maquina teste conectada)."
+            if ($confirm -ne 'Yes') {
+                Write-Log "[UNINSTALL DIRECT] Cancelado pelo usuario."
                 return
             }
 
-            if (-not $script:EffectiveSourcePath) {
-                throw "A pasta foi apenas inventariada pela sessao interativa. Para teste local, use uma conta com acesso direto ao UNC ou teste na maquina remota via SCCM/SYSTEM."
+            Write-Log "[UNINSTALL DIRECT] Executando em $computer via WMI/DCOM. SEM Run Script, SEM payload."
+            Write-Log "[UNINSTALL DIRECT] Comando: $cmd"
+            $btnTestUninstall.Enabled = $false
+            $form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
+            [System.Windows.Forms.Application]::DoEvents()
+
+            $run = Invoke-RemoteCommandDirect -ComputerName $computer -CommandLine $cmd -TimeoutSeconds 180
+            Write-Log "[UNINSTALL DIRECT] $($run.Mensagem)"
+
+            if (-not $run.Sucesso) {
+                [System.Windows.Forms.MessageBox]::Show(
+                    "A execucao remota nao foi concluida.`n`n$($run.Mensagem)",
+                    "Falha na desinstalacao", 'OK', 'Error') | Out-Null
+                return
             }
-            Write-Log "Executando desinstalacao de teste LOCALMENTE em: $($script:EffectiveSourcePath) (computador: $env:COMPUTERNAME)"
-            Push-Location $script:EffectiveSourcePath
+
+            # O msiexec pode encerrar o processo pai antes de o Windows Installer
+            # terminar de remover a entrada ARP. Aguarda e valida pelo mesmo motor
+            # DIRECT REGISTRY que ja foi aprovado.
+            Write-Log "[UNINSTALL DIRECT] Processo terminou. Validando remocao no registro..."
+            $removed = $false
+            $lastMatch = $null
+            $verify = [Diagnostics.Stopwatch]::StartNew()
+            while ($verify.Elapsed.TotalSeconds -lt 60) {
+                [System.Windows.Forms.Application]::DoEvents()
+                Start-Sleep -Seconds 2
+                $items = @(Get-InstalledProgramsRemote -ComputerName $computer -Filter $txtAppName.Text.Trim())
+                $lastMatch = Resolve-InstalledSoftwareByApplicationName -Items @($items) -ApplicationName $txtAppName.Text.Trim()
+                if (-not $lastMatch) { $removed = $true; break }
+            }
+
+            if ($removed) {
+                Write-Log "[UNINSTALL DIRECT] RESULTADO: REMOVIDO. A entrada nao existe mais no registro."
+                [System.Windows.Forms.MessageBox]::Show(
+                    "DESINSTALACAO CONFIRMADA`n`nAplicacao: $appName`nMaquina: $computer`n`nA entrada nao existe mais no registro remoto.",
+                    "Desinstalacao concluida", 'OK', 'Information') | Out-Null
+            }
+            else {
+                $still = if ($lastMatch) { "$($lastMatch.DisplayName) $($lastMatch.DisplayVersion)" } else { $appName }
+                Write-Log "[UNINSTALL DIRECT] RESULTADO: AINDA INSTALADO apos a verificacao. $still"
+                [System.Windows.Forms.MessageBox]::Show(
+                    "O comando remoto terminou, mas o aplicativo AINDA ESTA INSTALADO.`n`nEncontrado: $still`n`nIsso significa que a linha de uninstall nao removeu o produto, ou que o Windows Installer ainda nao concluiu a remocao.",
+                    "Desinstalacao nao confirmada", 'OK', 'Warning') | Out-Null
+            }
+            return
+        }
+
+        # Fallback antigo somente quando nao existe uma linha silenciosa vinda do registro.
+        if (-not $script:UninstallInfo -or -not $script:UninstallInfo.Encontrado) {
+            [System.Windows.Forms.MessageBox]::Show("Nao ha linha silenciosa detectada nem uninstall da pasta source.", "Aviso") | Out-Null
+            return
+        }
+
+        if ($script:RemoteTestConnected -and $script:RemoteTestComputer) {
+            [System.Windows.Forms.MessageBox]::Show(
+                "Nao foi encontrada uma linha silenciosa confiavel no registro.`n`nPor seguranca, esta build NAO vai voltar automaticamente ao Run Script/payload para testar uninstall.bat.`n`nUse a linha silenciosa detectada ou ajuste o uninstall da aplicacao.",
+                "Uninstall remoto nao disponivel", 'OK', 'Warning') | Out-Null
+            Write-Log "[UNINSTALL DIRECT] Sem RegistryUninstallCommand; fallback remoto por Run Script foi bloqueado."
+            return
+        }
+
+        $confirmLocal = [System.Windows.Forms.MessageBox]::Show(
+            "ATENCAO: nenhuma maquina teste remota esta conectada.`n`nExecutar '$($script:UninstallInfo.Arquivo)' LOCALMENTE em $env:COMPUTERNAME?",
+            "Confirmar execucao LOCAL",
+            [System.Windows.Forms.MessageBoxButtons]::YesNo,
+            [System.Windows.Forms.MessageBoxIcon]::Warning,
+            [System.Windows.Forms.MessageBoxDefaultButton]::Button2
+        )
+        if ($confirmLocal -ne 'Yes') { return }
+        if (-not $script:EffectiveSourcePath) { throw "Pasta source nao acessivel localmente." }
+
+        Push-Location $script:EffectiveSourcePath
+        try {
             if ($script:UninstallInfo.Tipo -eq 'PowerShell') {
                 & powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\$($script:UninstallInfo.Arquivo)"
             } else {
                 & cmd.exe /c ".\$($script:UninstallInfo.Arquivo)"
             }
-            Pop-Location
         }
-        Write-Log "Desinstalacao de teste finalizada."
+        finally { Pop-Location }
+        Write-Log "Desinstalacao local finalizada."
     }
-    catch { Write-Log "Erro na desinstalacao de teste: $($_.Exception.Message)" }
+    catch {
+        Write-Log "Erro na desinstalacao de teste: $($_.Exception.Message)"
+        [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, "Erro na desinstalacao", 'OK', 'Error') | Out-Null
+    }
+    finally {
+        $btnTestUninstall.Enabled = $true
+        $form.Cursor = [System.Windows.Forms.Cursors]::Default
+    }
 })
 
 function Build-CurrentDetectionText {
