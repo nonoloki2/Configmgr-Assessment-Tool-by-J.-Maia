@@ -851,6 +851,21 @@ function Wait-CMScriptResult {
             if (-not $RequireScriptOutput) {
                 return $status
             }
+
+            # Em alguns ambientes do ConfigMgr, o payload por dispositivo aparece
+            # primeiro (ou somente) em SMS_ScriptsExecutionStatus.ScriptOutput.
+            # Aproveita-o imediatamente em vez de obrigar a GUI a esperar o Summary.
+            $statusOutput = [string]$status.ScriptOutput
+            if (-not [string]::IsNullOrWhiteSpace($statusOutput)) {
+                return [PSCustomObject]@{
+                    ClientOperationID = $OperationID
+                    TaskID            = $taskId
+                    ScriptOutput      = $statusOutput
+                    ScriptError       = $scriptError
+                    LastUpdateTime    = $status.LastUpdateTime
+                    ResultSource      = 'SMS_ScriptsExecutionStatus'
+                }
+            }
         }
 
         if ($RequireScriptOutput -and $taskId) {
@@ -888,13 +903,16 @@ function Wait-CMScriptResult {
             }
         }
 
-        Start-Sleep -Seconds 2
-        $elapsed += 2
+        Start-Sleep -Seconds 1
+        $elapsed += 1
+        if ($RequireScriptOutput -and ($elapsed -eq 5 -or $elapsed -eq 15 -or $elapsed -eq 25)) {
+            try { Write-Log "[AUTO] Cliente respondeu; aguardando payload do Run Script... ${elapsed}s (OperationID=$OperationID TaskID=$taskId)" } catch { }
+        }
         [System.Windows.Forms.Application]::DoEvents()
     } while ($elapsed -lt $TimeoutSeconds)
 
     if ($RequireScriptOutput -and $sawStatus) {
-        throw "O cliente respondeu ao Run Script, mas o SMS Provider nao disponibilizou o payload em SMS_ScriptsExecutionSummary apos $TimeoutSeconds segundos. OperationID=$OperationID TaskID=$taskId."
+        throw "O cliente respondeu ao Run Script, mas nenhum ScriptOutput apareceu em SMS_ScriptsExecutionStatus nem SMS_ScriptsExecutionSummary apos $TimeoutSeconds segundos. OperationID=$OperationID TaskID=$taskId. Verifique Scripts.log no cliente e, no console SCCM, Monitoring > Script Status para esta execucao."
     }
 
     throw "Timeout aguardando retorno da maquina pelo SCCM apos $TimeoutSeconds segundos. Verifique Scripts.log/CcmMessaging.log."
@@ -1292,7 +1310,7 @@ $script:DetectionMode     = 'Registry'  # 'Registry' ou 'File'
 $script:DetectionFilePath = $null       # caminho do executavel, quando DetectionMode = 'File'
 $script:DetectedRegistryApp = $null
 $script:DetectedRegistryUninstallCommand = $null      # entrada real descoberta automaticamente na maquina teste
-$script:BuildId = '2026.08.26-REGISTRY-UNINSTALL-ENGINE1'
+$script:BuildId = '2026.08.26-REGISTRY-UNINSTALL-ENGINE2'
 
 # ----------------------------------------------------------------------------
 # GUI
@@ -1907,7 +1925,7 @@ $btnDetectRegistry.Add_Click({
     $status = $null
     $erro = $null
     try {
-        $status = Invoke-CMSystemAction -ComputerName $script:RemoteTestComputer -Action SearchInstalledSoftware -DisplayNamePattern $appSearchName -TimeoutSeconds 120
+        $status = Invoke-CMSystemAction -ComputerName $script:RemoteTestComputer -Action SearchInstalledSoftware -DisplayNamePattern $appSearchName -TimeoutSeconds 35
     }
     catch { $erro = $_.Exception.Message }
     finally {
