@@ -87,15 +87,15 @@ function Get-SourceManifestViaInteractiveSession {
     }
     catch {
         return [pscustomobject]@{
-            Sucesso=$false
-            Mensagem="Nao foi possivel identificar o usuario da sessao interativa: $($_.Exception.Message)"
+            Success=$false
+            Mensagem="Unable to identify the interactive session user: $($_.Exception.Message)"
         }
     }
 
     if (-not $explorerProc -or -not $explorerProc.UserName) {
         return [pscustomobject]@{
-            Sucesso=$false
-            Mensagem='Nenhuma sessao interativa com explorer.exe foi encontrada.'
+            Success=$false
+            Mensagem='No interactive session with explorer.exe was found.'
         }
     }
 
@@ -159,43 +159,44 @@ catch {
 
         if (-not (Test-Path -LiteralPath $resultFile)) {
             return [pscustomobject]@{
-                Sucesso=$false
-                Mensagem="A leitura da pasta nao retornou em 30 segundos como '$interactiveUser' (sessao $interactiveSessionId)."
+                Success=$false
+                Mensagem="Folder scan did not return within 30 seconds as '$interactiveUser' (session $interactiveSessionId)."
             }
         }
 
         $result = Get-Content -LiteralPath $resultFile -Raw | ConvertFrom-Json -ErrorAction Stop
         if (-not $result.Success) {
             return [pscustomobject]@{
-                Sucesso=$false
-                Mensagem="O usuario '$interactiveUser' (sessao $interactiveSessionId) NAO conseguiu enumerar o UNC '$SourcePath'. Erro real: $($result.Error)"
+                Success=$false
+                Mensagem="User '$interactiveUser' (session $interactiveSessionId) could NOT enumerate UNC '$SourcePath'. Actual error: $($result.Error)"
             }
         }
 
         function New-ManifestCommandInfo {
             param([bool]$Ps1,[bool]$Bat,[string]$Action)
+            # Wrapper .BAT tem prioridade quando existe.
+            if ($Bat) {
+                return [pscustomobject]@{ Encontrado=$true; Tipo='Batch'; Arquivo="$Action.bat"; Comando="$Action.bat" }
+            }
             if ($Ps1) {
                 return [pscustomobject]@{ Encontrado=$true; Tipo='PowerShell'; Arquivo="$Action.ps1"; Comando="powershell.exe -NoProfile -ExecutionPolicy Bypass -File `".\$Action.ps1`"" }
-            }
-            if ($Bat) {
-                return [pscustomobject]@{ Encontrado=$true; Tipo='Batch'; Arquivo="$Action.bat"; Comando="cmd.exe /c `".\$Action.bat`"" }
             }
             return [pscustomobject]@{ Encontrado=$false; Tipo=$null; Arquivo=$null; Comando=$null }
         }
 
         $filesFound = @($result.Files)
-        $fileSummary = if ($filesFound.Count -gt 0) { $filesFound -join ', ' } else { '<pasta vazia>' }
+        $fileSummary = if ($filesFound.Count -gt 0) { $filesFound -join ', ' } else { '<empty folder>' }
 
         return [pscustomobject]@{
-            Sucesso = $true
-            Mensagem = "UNC enumerado com sucesso como '$interactiveUser' (sessao $interactiveSessionId). Arquivos na raiz: $fileSummary"
+            Success = $true
+            Mensagem = "UNC successfully enumerated as '$interactiveUser' (session $interactiveSessionId). Files in root: $fileSummary"
             InstallInfo = New-ManifestCommandInfo -Ps1 ([bool]$result.InstallPs1) -Bat ([bool]$result.InstallBat) -Action 'install'
             UninstallInfo = New-ManifestCommandInfo -Ps1 ([bool]$result.UninstallPs1) -Bat ([bool]$result.UninstallBat) -Action 'uninstall'
             Files = $filesFound
         }
     }
     catch {
-        return [pscustomobject]@{ Sucesso=$false; Mensagem=$_.Exception.Message }
+        return [pscustomobject]@{ Success=$false; Mensagem=$_.Exception.Message }
     }
     finally {
         Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
@@ -214,7 +215,7 @@ function Resolve-SourceAccess {
         que nao tem permissao no share de arquivos, mas o usuario tem).
 
         Retorna um objeto com:
-          Sucesso           - bool
+          Success           - bool
           CaminhoEfetivo    - caminho a usar para Test-Path/Get-ChildItem/Copy-Item
           Mensagem          - detalhe do erro, se houver
 
@@ -234,18 +235,18 @@ function Resolve-SourceAccess {
     if ($Credential) {
         try {
             New-PSDrive -Name 'SCCMSRC' -PSProvider FileSystem -Root $Path -Credential $Credential -Scope Global -ErrorAction Stop | Out-Null
-            return [PSCustomObject]@{ Sucesso = $true; CaminhoEfetivo = 'SCCMSRC:\'; Mensagem = "Acesso via credencial alternativa OK." }
+            return [PSCustomObject]@{ Success = $true; CaminhoEfetivo = 'SCCMSRC:\'; Mensagem = "Access using alternate credentials succeeded." }
         }
         catch {
-            return [PSCustomObject]@{ Sucesso = $false; CaminhoEfetivo = $null; Mensagem = $_.Exception.Message }
+            return [PSCustomObject]@{ Success = $false; CaminhoEfetivo = $null; Mensagem = $_.Exception.Message }
         }
     }
     else {
         if (Test-Path -LiteralPath $Path) {
-            return [PSCustomObject]@{ Sucesso = $true; CaminhoEfetivo = $Path; Mensagem = "Acesso com a conta atual OK." }
+            return [PSCustomObject]@{ Success = $true; CaminhoEfetivo = $Path; Mensagem = "Access using the current account succeeded." }
         }
         else {
-            return [PSCustomObject]@{ Sucesso = $false; CaminhoEfetivo = $null; Mensagem = "Test-Path retornou falso (sem detalhe de erro adicional)." }
+            return [PSCustomObject]@{ Success = $false; CaminhoEfetivo = $null; Mensagem = "Test-Path returned false (no additional error details)." }
         }
     }
 }
@@ -266,20 +267,23 @@ function Get-InstallCommandLine {
     $ps1Path = Join-Path $FolderPath "$Action.ps1"
     $batPath = Join-Path $FolderPath "$Action.bat"
 
-    if (Test-Path -LiteralPath $ps1Path) {
+    # Para esta ferramenta, wrappers .BAT sao preferidos quando existem.
+    # Eles representam exatamente a logica de instalacao/desinstalacao ja validada
+    # pelo operador (incluindo timeout, tratamento de exit code etc.).
+    if (Test-Path -LiteralPath $batPath) {
+        return [PSCustomObject]@{
+            Encontrado = $true
+            Tipo       = 'Batch'
+            Arquivo    = "$Action.bat"
+            Comando    = "$Action.bat"
+        }
+    }
+    elseif (Test-Path -LiteralPath $ps1Path) {
         return [PSCustomObject]@{
             Encontrado = $true
             Tipo       = 'PowerShell'
             Arquivo    = "$Action.ps1"
             Comando    = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `".\$Action.ps1`""
-        }
-    }
-    elseif (Test-Path -LiteralPath $batPath) {
-        return [PSCustomObject]@{
-            Encontrado = $true
-            Tipo       = 'Batch'
-            Arquivo    = "$Action.bat"
-            Comando    = "cmd.exe /c `".\$Action.bat`""
         }
     }
     else {
@@ -348,7 +352,7 @@ foreach (`$app in (Get-ItemProperty -Path `$uninstallPaths -ErrorAction Silently
     if (`$actualNormalized -ne `$expectedNormalized) { continue }
     `$installed = Convert-AppVersion ([string]`$app.DisplayVersion)
     if (`$installed -and `$installed -ge `$minimum) {
-        Write-Output 'Instalado'
+        Write-Output 'Installed'
         exit 0
     }
 }
@@ -416,7 +420,7 @@ if (`$name -ne `$expectedName) { exit 0 }
 `$installed = Convert-AppVersion `$installedVersionText
 `$minimum = Convert-AppVersion `$expectedVersionText
 if (`$installed -and `$minimum -and `$installed -ge `$minimum) {
-    Write-Output 'Instalado'
+    Write-Output 'Installed'
 }
 "@
 }
@@ -440,7 +444,7 @@ function New-FileDetectionScriptText {
 `$ErrorActionPreference = 'SilentlyContinue'
 `$caminho = '$FilePath'
 if (Test-Path -LiteralPath `$caminho) {
-    Write-Output "Instalado"
+    Write-Output "Installed"
 }
 "@
     }
@@ -454,13 +458,13 @@ if (Test-Path -LiteralPath `$caminho) {
         `$fileVersionRaw = (Get-Item -LiteralPath `$caminho).VersionInfo.FileVersion
         `$fv = [version](`$fileVersionRaw -replace '[^0-9.]', '')
         if (`$fv -ge `$minVersion) {
-            Write-Output "Instalado"
+            Write-Output "Installed"
         }
     }
     catch {
         # Se o arquivo nao tiver informacao de versao legivel, considera
         # instalado apenas pela existencia (mais permissivo que falhar).
-        Write-Output "Instalado"
+        Write-Output "Installed"
     }
 }
 "@
@@ -474,7 +478,7 @@ function Connect-ToSCCM {
 
     try {
         if (-not $env:SMS_ADMIN_UI_PATH) {
-            throw "Variavel SMS_ADMIN_UI_PATH nao encontrada. O Console do SCCM precisa estar instalado nesta maquina."
+            throw "SMS_ADMIN_UI_PATH environment variable was not found. The SCCM Console must be installed on this machine."
         }
 
         if (-not (Get-Module ConfigurationManager)) {
@@ -487,10 +491,10 @@ function Connect-ToSCCM {
         }
 
         Set-Location "$($SiteCode):\"
-        return [PSCustomObject]@{ Sucesso = $true; Mensagem = "Conectado a $SiteServer ($SiteCode)" }
+        return [PSCustomObject]@{ Success = $true; Mensagem = "Connected to $SiteServer ($SiteCode)" }
     }
     catch {
-        return [PSCustomObject]@{ Sucesso = $false; Mensagem = $_.Exception.Message }
+        return [PSCustomObject]@{ Success = $false; Mensagem = $_.Exception.Message }
     }
 }
 
@@ -573,8 +577,8 @@ switch ($Action) {
             completo (com a varredura de HKU) estourava esse limite,
             fazendo a deteccao "rodar em branco" sem erro nenhum.
         #>
-        if ([string]::IsNullOrWhiteSpace($DisplayNamePattern)) { throw 'DisplayNamePattern nao informado.' }
-        if ([string]::IsNullOrWhiteSpace($MinVersion)) { throw 'MinVersion nao informado.' }
+        if ([string]::IsNullOrWhiteSpace($DisplayNamePattern)) { throw 'DisplayNamePattern was not provided.' }
+        if ([string]::IsNullOrWhiteSpace($MinVersion)) { throw 'MinVersion was not provided.' }
 
         $minVer = $null
         try { $minVer = [version]$MinVersion } catch { throw "MinVersion invalido: '$MinVersion'" }
@@ -598,13 +602,13 @@ switch ($Action) {
         [PSCustomObject]@{
             ComputerName     = $env:COMPUTERNAME
             Identity         = Get-ExecutionIdentity
-            Result           = if ($detected) { 'Instalado' } else { 'NaoInstalado' }
+            Result           = if ($detected) { 'Installed' } else { 'NotInstalled' }
             Correspondencias = $detalhes
         } | ConvertTo-Json -Compress -Depth 3
     }
 
     'RunFileDetection' {
-        if ([string]::IsNullOrWhiteSpace($FilePath)) { throw 'FilePath nao informado.' }
+        if ([string]::IsNullOrWhiteSpace($FilePath)) { throw 'FilePath was not provided.' }
 
         $existe = Test-Path -LiteralPath $FilePath
         $versaoArquivo = $null
@@ -633,15 +637,15 @@ switch ($Action) {
             Identity     = Get-ExecutionIdentity
             Existe       = $existe
             FileVersion  = $versaoArquivo
-            Result       = if ($detected) { 'Instalado' } else { 'NaoInstalado' }
+            Result       = if ($detected) { 'Installed' } else { 'NotInstalled' }
         } | ConvertTo-Json -Compress
     }
 
     'RunSourceScript' {
-        if ([string]::IsNullOrWhiteSpace($SourcePath)) { throw 'SourcePath nao informado.' }
-        if ([string]::IsNullOrWhiteSpace($ScriptFile)) { throw 'ScriptFile nao informado.' }
+        if ([string]::IsNullOrWhiteSpace($SourcePath)) { throw 'SourcePath was not provided.' }
+        if ([string]::IsNullOrWhiteSpace($ScriptFile)) { throw 'ScriptFile was not provided.' }
         if (-not (Test-Path -LiteralPath $SourcePath)) {
-            throw "SYSTEM nao conseguiu acessar a pasta de origem: $SourcePath"
+            throw "SYSTEM could not access the source folder: $SourcePath"
         }
 
         Push-Location -LiteralPath $SourcePath
@@ -653,7 +657,7 @@ switch ($Action) {
                 $output = & cmd.exe /c ('"{0}"' -f (Join-Path $SourcePath $ScriptFile)) 2>&1 | Out-String
             }
             else {
-                throw "Tipo de script nao suportado: $ScriptType"
+                throw "Unsupported script type: $ScriptType"
             }
         }
         finally {
@@ -679,7 +683,7 @@ switch ($Action) {
             Get-ItemProperty -Path $paths -ErrorAction SilentlyContinue |
                 Where-Object { -not [string]::IsNullOrWhiteSpace($_.DisplayName) } |
                 Select-Object DisplayName, DisplayVersion, Publisher, PSPath, UninstallString, QuietUninstallString,
-                    @{Name='Escopo'; Expression={'Maquina (HKLM)'}}
+                    @{Name='Escopo'; Expression={'Machine (HKLM)'}}
         )
 
         # Instalacoes "so para o usuario atual" (ALLUSERS != 1 no MSI, ou instaladores
@@ -710,7 +714,7 @@ switch ($Action) {
     }
 
     'FindExecutable' {
-        if ([string]::IsNullOrWhiteSpace($NamePattern)) { throw 'NamePattern nao informado.' }
+        if ([string]::IsNullOrWhiteSpace($NamePattern)) { throw 'NamePattern was not provided.' }
 
         $raizes = New-Object System.Collections.Generic.List[string]
         foreach ($r in @($env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:ProgramData)) {
@@ -764,7 +768,7 @@ function Ensure-CMAppCreatorHelperScript {
         }
 
         if (-not $helper) {
-            throw "Nao foi possivel localizar/criar o helper '$ScriptName'."
+            throw "Unable to locate/create helper '$ScriptName'."
         }
 
         # ApprovalState 3 = Approved. Em ambientes onde o autor nao pode
@@ -772,7 +776,7 @@ function Ensure-CMAppCreatorHelperScript {
         # que a aprovacao precisa ser feita uma unica vez por outro admin.
         if ([int]$helper.ApprovalState -ne 3) {
             try {
-                Approve-CMScript -InputObject $helper -Comment 'Helper do SCCM App Creator para testes como SYSTEM.' -Confirm:$false -ErrorAction Stop | Out-Null
+                Approve-CMScript -InputObject $helper -Comment 'SCCM App Creator helper for SYSTEM-context operations.' -Confirm:$false -ErrorAction Stop | Out-Null
                 Start-Sleep -Milliseconds 500
                 $helper = Get-CMScript -ScriptName $ScriptName -Fast -ErrorAction Stop |
                     Where-Object { $_.ScriptName -eq $ScriptName } |
@@ -780,27 +784,27 @@ function Ensure-CMAppCreatorHelperScript {
             }
             catch {
                 return [PSCustomObject]@{
-                    Sucesso = $false
+                    Success = $false
                     Helper  = $helper
                     PrecisaAprovacao = $true
-                    Mensagem = "O helper '$ScriptName' foi criado, mas ainda precisa ser APROVADO no SCCM em Software Library > Scripts. Por padrao, o autor nao pode aprovar o proprio script. Depois de aprovado, clique novamente em Conectar via SCCM / SYSTEM."
+                    Mensagem = "Helper '$ScriptName' was created but still needs to be APPROVED in SCCM under Software Library > Scripts. By default, the author cannot approve their own script. After approval, click Connect via SCCM / SYSTEM again."
                 }
             }
         }
 
         if ([int]$helper.ApprovalState -ne 3) {
             return [PSCustomObject]@{
-                Sucesso = $false
+                Success = $false
                 Helper  = $helper
                 PrecisaAprovacao = $true
-                Mensagem = "O helper '$ScriptName' existe, mas ainda nao esta aprovado no SCCM."
+                Mensagem = "Helper '$ScriptName' exists but is not approved in SCCM yet."
             }
         }
 
-        return [PSCustomObject]@{ Sucesso = $true; Helper = $helper; PrecisaAprovacao = $false; Mensagem = "Helper '$ScriptName' aprovado e pronto." }
+        return [PSCustomObject]@{ Success = $true; Helper = $helper; PrecisaAprovacao = $false; Mensagem = "Helper '$ScriptName' approved and ready." }
     }
     catch {
-        return [PSCustomObject]@{ Sucesso = $false; Helper = $null; PrecisaAprovacao = $false; Mensagem = $_.Exception.Message }
+        return [PSCustomObject]@{ Success = $false; Helper = $null; PrecisaAprovacao = $false; Mensagem = $_.Exception.Message }
     }
 }
 
@@ -839,14 +843,14 @@ function Wait-CMScriptResult {
                 Select-Object -First 1
         }
         catch {
-            throw "Falha consultando o resultado do Run Script no SMS Provider: $($_.Exception.Message)"
+            throw "Failed to query Run Script result from the SMS Provider: $($_.Exception.Message)"
         }
 
         if ($status) {
             $sawStatus = $true
             $scriptError = [string]$status.ScriptError
             if (-not [string]::IsNullOrWhiteSpace($scriptError)) {
-                throw "Run Script retornou erro na maquina: $scriptError"
+                throw "Run Script returned an error on the machine: $scriptError"
             }
 
             # Ping: o simples status prova que o cliente respondeu.
@@ -896,10 +900,10 @@ function Wait-CMScriptResult {
     } while ($elapsed -lt $TimeoutSeconds)
 
     if ($RequireScriptOutput -and $sawStatus) {
-        throw "O cliente respondeu ao Run Script, mas o SMS Provider nao disponibilizou o payload em SMS_ScriptsExecutionSummary apos $TimeoutSeconds segundos. OperationID=$OperationID TaskID=$taskId."
+        throw "The client responded to Run Script, but the SMS Provider did not make the payload available in SMS_ScriptsExecutionSummary after $TimeoutSeconds seconds. OperationID=$OperationID TaskID=$taskId."
     }
 
-    throw "Timeout aguardando retorno da maquina pelo SCCM apos $TimeoutSeconds segundos. Verifique Scripts.log/CcmMessaging.log."
+    throw "Timed out waiting for the machine to respond through SCCM after $TimeoutSeconds seconds. Check Scripts.log/CcmMessaging.log."
 }
 
 function Invoke-CMSystemAction {
@@ -925,43 +929,43 @@ function Invoke-CMSystemAction {
         Select-Object -First 1
 
     if (-not $device) {
-        throw "A maquina '$ComputerName' nao foi encontrada como device no SCCM."
+        throw "Machine '$ComputerName' was not found as a device in SCCM."
     }
 
     $helperResult = Ensure-CMAppCreatorHelperScript
-    if (-not $helperResult.Sucesso) {
+    if (-not $helperResult.Success) {
         throw $helperResult.Mensagem
     }
 
     $params = @{ Action = $Action }
 
     if ($Action -eq 'RunSourceScript') {
-        if (-not $ScriptInfo) { throw 'Informacoes do script de install/uninstall nao fornecidas.' }
-        if ([string]::IsNullOrWhiteSpace($SourcePath)) { throw 'Pasta de origem nao informada.' }
+        if (-not $ScriptInfo) { throw 'Install/uninstall script information was not provided.' }
+        if ([string]::IsNullOrWhiteSpace($SourcePath)) { throw 'Source folder was not provided.' }
         $params.SourcePath = $SourcePath
         $params.ScriptType = $ScriptInfo.Tipo
         $params.ScriptFile = $ScriptInfo.Arquivo
     }
     elseif ($Action -eq 'FindExecutable') {
-        if ([string]::IsNullOrWhiteSpace($NamePattern)) { throw 'Padrao de nome de arquivo nao informado.' }
+        if ([string]::IsNullOrWhiteSpace($NamePattern)) { throw 'File name pattern was not provided.' }
         $params.NamePattern = $NamePattern
         if (-not [string]::IsNullOrWhiteSpace($ExtraRoots)) { $params.ExtraRoots = $ExtraRoots }
     }
     elseif ($Action -eq 'RunRegistryDetection') {
-        if ([string]::IsNullOrWhiteSpace($DisplayNamePattern)) { throw 'Padrao de DisplayName nao informado.' }
-        if ([string]::IsNullOrWhiteSpace($MinVersion)) { throw 'Versao minima nao informada.' }
+        if ([string]::IsNullOrWhiteSpace($DisplayNamePattern)) { throw 'DisplayName pattern was not provided.' }
+        if ([string]::IsNullOrWhiteSpace($MinVersion)) { throw 'Minimum version was not provided.' }
         $params.DisplayNamePattern = $DisplayNamePattern
         $params.MinVersion = $MinVersion
     }
     elseif ($Action -eq 'RunFileDetection') {
-        if ([string]::IsNullOrWhiteSpace($FilePath)) { throw 'Caminho do arquivo nao informado.' }
+        if ([string]::IsNullOrWhiteSpace($FilePath)) { throw 'File path was not provided.' }
         $params.FilePath = $FilePath
         if (-not [string]::IsNullOrWhiteSpace($MinVersion)) { $params.MinVersion = $MinVersion }
     }
 
     $invoke = Invoke-CMScript -ScriptGuid $helperResult.Helper.ScriptGuid -Device $device -ScriptParameter $params -PassThru -Confirm:$false -ErrorAction Stop
     if (-not $invoke -or -not $invoke.OperationID) {
-        throw 'O SCCM nao retornou OperationID para a execucao do Run Script.'
+        throw 'SCCM did not return an OperationID for the Run Script execution.'
     }
 
     # Ping e apenas validacao de conectividade logica pelo SCCM: nao exija
@@ -990,13 +994,13 @@ function Connect-RemoteTestMachine {
         } catch {}
 
         return [PSCustomObject]@{
-            Sucesso  = $true
-            Mensagem = if ($identity) { "Maquina respondeu pelo SCCM. Contexto remoto: $identity" } else { "Maquina respondeu ao Run Script do SCCM. Conexao logica validada." }
+            Success  = $true
+            Mensagem = if ($identity) { "Machine responded through SCCM. Remote context: $identity" } else { "Machine responded to SCCM Run Script. Logical connection validated." }
             Output   = $output
         }
     }
     catch {
-        return [PSCustomObject]@{ Sucesso = $false; Mensagem = $_.Exception.Message; Output = $null }
+        return [PSCustomObject]@{ Success = $false; Mensagem = $_.Exception.Message; Output = $null }
     }
 }
 
@@ -1141,16 +1145,16 @@ function Invoke-RemoteCommandDirect {
         if ($sw.Elapsed.TotalSeconds -ge $TimeoutSeconds) { $timedOut = $true }
 
         return [pscustomobject]@{
-            Sucesso    = (-not $timedOut)
+            Success    = (-not $timedOut)
             ProcessId  = $pid
             TimedOut   = $timedOut
             CommandLine = $cmd
-            Mensagem   = if ($timedOut) { "Processo remoto PID $pid ainda ativo apos $TimeoutSeconds segundos." } else { "Processo remoto PID $pid terminou." }
+            Mensagem   = if ($timedOut) { "Remote process PID $pid is still running after $TimeoutSeconds seconds." } else { "Remote process PID $pid finished." }
         }
     }
     catch {
         return [pscustomobject]@{
-            Sucesso=$false; ProcessId=$null; TimedOut=$false; CommandLine=$CommandLine; Mensagem=$_.Exception.Message
+            Success=$false; ProcessId=$null; TimedOut=$false; CommandLine=$CommandLine; Mensagem=$_.Exception.Message
         }
     }
     finally {
@@ -1326,8 +1330,8 @@ function Show-InstalledSoftwarePicker {
     param(
         [Parameter(Mandatory)][array]$Items,
         [string]$InitialFilter = '',
-        [string]$WindowTitle = "Selecione o aplicativo detectado no registro da maquina teste",
-        [string[]]$ColumnHeaders = @("Nome (DisplayName)", "Versao", "Fabricante")
+        [string]$WindowTitle = "Select the application detected in the test machine registry",
+        [string[]]$ColumnHeaders = @("Name (DisplayName)", "Version", "Publisher")
     )
 
     $picker = New-Object System.Windows.Forms.Form
@@ -1339,7 +1343,7 @@ function Show-InstalledSoftwarePicker {
     $picker.MinimizeBox = $false
 
     $lblFilter = New-Object System.Windows.Forms.Label
-    $lblFilter.Text = "Filtrar por nome:"
+    $lblFilter.Text = "Filter by name:"
     $lblFilter.Location = New-Object System.Drawing.Point(10, 12)
     $lblFilter.Size = New-Object System.Drawing.Size(100, 20)
     $picker.Controls.Add($lblFilter)
@@ -1385,12 +1389,12 @@ function Show-InstalledSoftwarePicker {
     $lblCount = New-Object System.Windows.Forms.Label
     $lblCount.Location = New-Object System.Drawing.Point(10, 372)
     $lblCount.Size = New-Object System.Drawing.Size(400, 20)
-    $lblCount.Text = "$($Items.Count) programa(s) encontrado(s) no total nesta maquina."
+    $lblCount.Text = "$($Items.Count) program(s) found in total on this machine."
     $lblCount.ForeColor = 'Gray'
     $picker.Controls.Add($lblCount)
 
     $btnOk = New-Object System.Windows.Forms.Button
-    $btnOk.Text = "Selecionar"
+    $btnOk.Text = "Select"
     $btnOk.Location = New-Object System.Drawing.Point(455, 368)
     $btnOk.Size = New-Object System.Drawing.Size(90, 28)
     $btnOk.DialogResult = [System.Windows.Forms.DialogResult]::OK
@@ -1435,26 +1439,55 @@ function New-SCCMScriptApplication {
         [Parameter(Mandatory)][string]$DetectionScript
     )
 
+    $deploymentTypeName = "$AppName - Script Installer"
+
     try {
+        if ([string]::IsNullOrWhiteSpace($DetectionScript)) {
+            throw "The Detection Script is empty. The application will NOT be created."
+        }
+
         New-CMApplication -Name $AppName -Publisher $Publisher -SoftwareVersion $Version -ErrorAction Stop | Out-Null
 
+        # Cria primeiro o Deployment Type com os comandos/content.
         Add-CMScriptDeploymentType `
             -ApplicationName $AppName `
-            -DeploymentTypeName "$AppName - Instalacao via Script" `
+            -DeploymentTypeName $deploymentTypeName `
             -ContentLocation $SourceFolder `
             -InstallCommand $InstallCommand `
             -UninstallCommand $UninstallCommand `
-            -ScriptLanguage 'PowerShell' `
-            -ScriptText $DetectionScript `
             -InstallationBehaviorType InstallForSystem `
             -LogonRequirementType WhetherOrNotUserLoggedOn `
             -UserInteractionMode Hidden `
             -ErrorAction Stop | Out-Null
 
-        return [PSCustomObject]@{ Sucesso = $true; Mensagem = "Aplicacao '$AppName' criada com sucesso no SCCM." }
+        # IMPORTANTE: aplica o Detection Method numa segunda etapa explicita.
+        # Isso evita o caso observado em que Add-CMScriptDeploymentType cria o DT,
+        # mas o script de deteccao nao fica persistido no objeto do ConfigMgr.
+        $dt = Get-CMDeploymentType -ApplicationName $AppName -DeploymentTypeName $deploymentTypeName -ErrorAction Stop
+        if (-not $dt) {
+            throw "Deployment Type '$deploymentTypeName' was created but could not be retrieved to configure the Detection Method."
+        }
+
+        Set-CMScriptDeploymentType `
+            -InputObject $dt `
+            -ScriptLanguage PowerShell `
+            -ScriptText $DetectionScript `
+            -Force `
+            -ErrorAction Stop | Out-Null
+
+        # Rele o Deployment Type depois do Set para garantir que o SCCM aceitou a alteracao.
+        $dtCheck = Get-CMDeploymentType -ApplicationName $AppName -DeploymentTypeName $deploymentTypeName -ErrorAction Stop
+        if (-not $dtCheck) {
+            throw "Failed to read the Deployment Type after saving the Detection Method."
+        }
+
+        return [PSCustomObject]@{
+            Success = $true
+            Mensagem = "Application '$AppName' created with Deployment Type and PowerShell Detection Method configured in SCCM."
+        }
     }
     catch {
-        return [PSCustomObject]@{ Sucesso = $false; Mensagem = $_.Exception.Message }
+        return [PSCustomObject]@{ Success = $false; Mensagem = $_.Exception.Message }
     }
 }
 
@@ -1477,7 +1510,7 @@ $script:DetectionMode     = 'Registry'  # 'Registry' ou 'File'
 $script:DetectionFilePath = $null       # caminho do executavel, quando DetectionMode = 'File'
 $script:DetectedRegistryApp = $null      # entrada real descoberta automaticamente na maquina teste
 $script:RegistryUninstallCommand = $null  # uninstall silencioso vindo do registro; source e fallback
-$script:BuildId = '2026.08.26-SCCM-CREATOR-FINAL2'
+$script:BuildId = '2026.08.26-SCCM-CREATOR-FINAL6-CMDLINEFIX'
 
 # ----------------------------------------------------------------------------
 # GUI
@@ -1491,7 +1524,7 @@ $form.MaximizeBox      = $false
 
 # --- Grupo: Conexao SCCM ---
 $grpConn = New-Object System.Windows.Forms.GroupBox
-$grpConn.Text = "1. Conexao com o SCCM"
+$grpConn.Text = "1. SCCM Connection"
 $grpConn.Location = New-Object System.Drawing.Point(10, 10)
 $grpConn.Size = New-Object System.Drawing.Size(690, 90)
 $form.Controls.Add($grpConn)
@@ -1519,13 +1552,13 @@ $txtSiteCode.Size = New-Object System.Drawing.Size(80, 20)
 $grpConn.Controls.Add($txtSiteCode)
 
 $btnConnect = New-Object System.Windows.Forms.Button
-$btnConnect.Text = "Conectar"
+$btnConnect.Text = "Connect"
 $btnConnect.Location = New-Object System.Drawing.Point(500, 20)
 $btnConnect.Size = New-Object System.Drawing.Size(90, 25)
 $grpConn.Controls.Add($btnConnect)
 
 $lblConnStatus = New-Object System.Windows.Forms.Label
-$lblConnStatus.Text = "Nao conectado."
+$lblConnStatus.Text = "Not connected."
 $lblConnStatus.ForeColor = 'Red'
 $lblConnStatus.Location = New-Object System.Drawing.Point(10, 55)
 $lblConnStatus.Size = New-Object System.Drawing.Size(650, 20)
@@ -1533,13 +1566,13 @@ $grpConn.Controls.Add($lblConnStatus)
 
 # --- Grupo: Dados da Aplicacao ---
 $grpApp = New-Object System.Windows.Forms.GroupBox
-$grpApp.Text = "2. Dados da Aplicacao"
+$grpApp.Text = "2. Application Details"
 $grpApp.Location = New-Object System.Drawing.Point(10, 110)
 $grpApp.Size = New-Object System.Drawing.Size(690, 240)
 $form.Controls.Add($grpApp)
 
 $lblAppName = New-Object System.Windows.Forms.Label
-$lblAppName.Text = "Nome da Aplicacao:"
+$lblAppName.Text = "Application Name:"
 $lblAppName.Location = New-Object System.Drawing.Point(10, 25)
 $lblAppName.Size = New-Object System.Drawing.Size(120, 20)
 $grpApp.Controls.Add($lblAppName)
@@ -1557,7 +1590,7 @@ $txtAppName.Add_TextChanged({
         $txtVersion.Text = ''
         $txtDetectPattern.Text = ''
         if ($lblDetectionMode) {
-            $lblDetectionMode.Text = 'Deteccao ainda nao gerada para este nome.'
+            $lblDetectionMode.Text = 'Detection has not been generated for this name yet.'
             $lblDetectionMode.ForeColor = 'Gray'
         }
     }
@@ -1570,13 +1603,13 @@ $txtAppName.Add_TextChanged({
         $script:DetectionText = $null
         $txtDetectPattern.Text = ''
         $txtVersion.Text = ''
-        $lblDetectionMode.Text = "Modo de deteccao: aguardando descoberta pelo Nome da Aplicacao."
+        $lblDetectionMode.Text = "Detection mode: waiting for discovery by Application Name."
         $lblDetectionMode.ForeColor = 'Gray'
     }
 })
 
 $lblPublisher = New-Object System.Windows.Forms.Label
-$lblPublisher.Text = "Fabricante:"
+$lblPublisher.Text = "Publisher:"
 $lblPublisher.Location = New-Object System.Drawing.Point(10, 55)
 $lblPublisher.Size = New-Object System.Drawing.Size(120, 20)
 $grpApp.Controls.Add($lblPublisher)
@@ -1587,7 +1620,7 @@ $txtPublisher.Size = New-Object System.Drawing.Size(350, 20)
 $grpApp.Controls.Add($txtPublisher)
 
 $lblVersion = New-Object System.Windows.Forms.Label
-$lblVersion.Text = "Versao detectada:"
+$lblVersion.Text = "Version detectada:"
 $lblVersion.Location = New-Object System.Drawing.Point(10, 85)
 $lblVersion.Size = New-Object System.Drawing.Size(120, 20)
 $grpApp.Controls.Add($lblVersion)
@@ -1598,7 +1631,7 @@ $txtVersion.Size = New-Object System.Drawing.Size(150, 20)
 $grpApp.Controls.Add($txtVersion)
 
 $lblDetectPattern = New-Object System.Windows.Forms.Label
-$lblDetectPattern.Text = "DisplayName detectado:"
+$lblDetectPattern.Text = "Detected DisplayName:"
 $lblDetectPattern.Location = New-Object System.Drawing.Point(300, 85)
 $lblDetectPattern.Size = New-Object System.Drawing.Size(190, 20)
 $grpApp.Controls.Add($lblDetectPattern)
@@ -1609,7 +1642,7 @@ $txtDetectPattern.Size = New-Object System.Drawing.Size(190, 20)
 $grpApp.Controls.Add($txtDetectPattern)
 
 $lblSourceFolder = New-Object System.Windows.Forms.Label
-$lblSourceFolder.Text = "Pasta de Origem (source):"
+$lblSourceFolder.Text = "Source Folder:"
 $lblSourceFolder.Location = New-Object System.Drawing.Point(10, 115)
 $lblSourceFolder.Size = New-Object System.Drawing.Size(150, 20)
 $grpApp.Controls.Add($lblSourceFolder)
@@ -1630,69 +1663,69 @@ $txtSourceFolder.Add_TextChanged({
         $script:UninstallInfo = $null
         $txtInstallCmd.Text = ''
         $txtUninstallCmd.Text = ''
-        $lblScanResult.Text = 'Pasta alterada - escaneie novamente.'
+        $lblScanResult.Text = 'Folder changed - scan again.'
     }
 })
 
 
 $btnPasteFolder = New-Object System.Windows.Forms.Button
-$btnPasteFolder.Text = "Colar"
+$btnPasteFolder.Text = "Paste"
 $btnPasteFolder.Location = New-Object System.Drawing.Point(140, 138)
 $btnPasteFolder.Size = New-Object System.Drawing.Size(60, 23)
 $grpApp.Controls.Add($btnPasteFolder)
 
 $btnBrowse = New-Object System.Windows.Forms.Button
-$btnBrowse.Text = "Procurar..."
+$btnBrowse.Text = "Browse..."
 $btnBrowse.Location = New-Object System.Drawing.Point(205, 138)
 $btnBrowse.Size = New-Object System.Drawing.Size(80, 23)
 $grpApp.Controls.Add($btnBrowse)
 
 $btnScan = New-Object System.Windows.Forms.Button
-$btnScan.Text = "Escanear Pasta"
+$btnScan.Text = "Scan Folder"
 $btnScan.Location = New-Object System.Drawing.Point(290, 138)
 $btnScan.Size = New-Object System.Drawing.Size(120, 23)
 $grpApp.Controls.Add($btnScan)
 
 $btnUseInteractiveSession = New-Object System.Windows.Forms.Button
-$btnUseInteractiveSession.Text = "Usar sessao logada (sem senha)"
+$btnUseInteractiveSession.Text = "Use logged-on session (no password)"
 $btnUseInteractiveSession.Location = New-Object System.Drawing.Point(140, 165)
 $btnUseInteractiveSession.Size = New-Object System.Drawing.Size(220, 23)
 $grpApp.Controls.Add($btnUseInteractiveSession)
 
 $btnSourceCred = New-Object System.Windows.Forms.Button
-$btnSourceCred.Text = "Ou informar credencial..."
+$btnSourceCred.Text = "Or provide credentials..."
 $btnSourceCred.Location = New-Object System.Drawing.Point(365, 165)
 $btnSourceCred.Size = New-Object System.Drawing.Size(150, 23)
 $grpApp.Controls.Add($btnSourceCred)
 
 $btnClearSourceCred = New-Object System.Windows.Forms.Button
-$btnClearSourceCred.Text = "Limpar"
+$btnClearSourceCred.Text = "Clear"
 $btnClearSourceCred.Location = New-Object System.Drawing.Point(520, 165)
 $btnClearSourceCred.Size = New-Object System.Drawing.Size(55, 23)
 $grpApp.Controls.Add($btnClearSourceCred)
 
 $lblSourceCredStatus = New-Object System.Windows.Forms.Label
-$lblSourceCredStatus.Text = "Acesso a pasta: usando a conta atual do script."
+$lblSourceCredStatus.Text = "Folder access: using the current script account."
 $lblSourceCredStatus.ForeColor = 'Gray'
 $lblSourceCredStatus.Location = New-Object System.Drawing.Point(10, 192)
 $lblSourceCredStatus.Size = New-Object System.Drawing.Size(670, 18)
 $grpApp.Controls.Add($lblSourceCredStatus)
 
 $lblScanResult = New-Object System.Windows.Forms.Label
-$lblScanResult.Text = "Instalacao: -- | Desinstalacao: --"
+$lblScanResult.Text = "Installation: -- | Uninstallation: --"
 $lblScanResult.Location = New-Object System.Drawing.Point(10, 210)
 $lblScanResult.Size = New-Object System.Drawing.Size(670, 20)
 $grpApp.Controls.Add($lblScanResult)
 
 # --- Grupo: Maquina de Teste Remota (CyberArk / conta de servico sem acesso a maquina teste) ---
 $grpRemote = New-Object System.Windows.Forms.GroupBox
-$grpRemote.Text = "3. Maquina de Teste (Remota - opcional, use quando o script roda no servidor)"
+$grpRemote.Text = "3. Test Machine (Remote - optional, use when the script runs on the server)"
 $grpRemote.Location = New-Object System.Drawing.Point(10, 360)
 $grpRemote.Size = New-Object System.Drawing.Size(690, 125)
 $form.Controls.Add($grpRemote)
 
 $lblTestMachine = New-Object System.Windows.Forms.Label
-$lblTestMachine.Text = "Nome/IP da maquina teste:"
+$lblTestMachine.Text = "Test Machine Name/IP:"
 $lblTestMachine.Location = New-Object System.Drawing.Point(10, 25)
 $lblTestMachine.Size = New-Object System.Drawing.Size(150, 20)
 $grpRemote.Controls.Add($lblTestMachine)
@@ -1703,46 +1736,46 @@ $txtTestMachine.Size = New-Object System.Drawing.Size(200, 20)
 $grpRemote.Controls.Add($txtTestMachine)
 
 $btnConnectRemote = New-Object System.Windows.Forms.Button
-$btnConnectRemote.Text = "Conectar via SCCM / SYSTEM"
+$btnConnectRemote.Text = "Connect via SCCM / SYSTEM"
 $btnConnectRemote.Location = New-Object System.Drawing.Point(375, 21)
 $btnConnectRemote.Size = New-Object System.Drawing.Size(170, 23)
 $grpRemote.Controls.Add($btnConnectRemote)
 
 $btnDisconnectRemote = New-Object System.Windows.Forms.Button
-$btnDisconnectRemote.Text = "Desconectar"
+$btnDisconnectRemote.Text = "Disconnect"
 $btnDisconnectRemote.Location = New-Object System.Drawing.Point(555, 21)
 $btnDisconnectRemote.Size = New-Object System.Drawing.Size(125, 23)
 $grpRemote.Controls.Add($btnDisconnectRemote)
 
 $lblRemoteStatus = New-Object System.Windows.Forms.Label
-$lblRemoteStatus.Text = "Sem maquina teste conectada pelo SCCM (testes rodarao localmente)."
+$lblRemoteStatus.Text = "No test machine connected through SCCM (tests will run locally)."
 $lblRemoteStatus.ForeColor = 'Gray'
 $lblRemoteStatus.Location = New-Object System.Drawing.Point(10, 48)
 $lblRemoteStatus.Size = New-Object System.Drawing.Size(670, 18)
 $grpRemote.Controls.Add($lblRemoteStatus)
 
 $btnDetectRegistry = New-Object System.Windows.Forms.Button
-$btnDetectRegistry.Text = "Gerar Deteccao pelo Nome da Aplicacao"
+$btnDetectRegistry.Text = "Generate Detection by Application Name"
 $btnDetectRegistry.Location = New-Object System.Drawing.Point(10, 70)
 $btnDetectRegistry.Size = New-Object System.Drawing.Size(280, 25)
 $btnDetectRegistry.BackColor = [System.Drawing.Color]::LightSteelBlue
 $grpRemote.Controls.Add($btnDetectRegistry)
 
 $btnDetectFile = New-Object System.Windows.Forms.Button
-$btnDetectFile.Text = "Detectar por Arquivo/Executavel..."
+$btnDetectFile.Text = "Detect by File/Executable..."
 $btnDetectFile.Location = New-Object System.Drawing.Point(300, 70)
 $btnDetectFile.Size = New-Object System.Drawing.Size(230, 25)
 $btnDetectFile.BackColor = [System.Drawing.Color]::LightGoldenrodYellow
 $grpRemote.Controls.Add($btnDetectFile)
 
 $btnClearFileDetection = New-Object System.Windows.Forms.Button
-$btnClearFileDetection.Text = "Voltar p/ Registro Automatico"
+$btnClearFileDetection.Text = "Back to Automatic Registry"
 $btnClearFileDetection.Location = New-Object System.Drawing.Point(540, 70)
 $btnClearFileDetection.Size = New-Object System.Drawing.Size(140, 25)
 $grpRemote.Controls.Add($btnClearFileDetection)
 
 $lblDetectionMode = New-Object System.Windows.Forms.Label
-$lblDetectionMode.Text = "Modo de deteccao: Registro automatico pelo Nome da Aplicacao."
+$lblDetectionMode.Text = "Detection mode: automatic Registry by Application Name."
 $lblDetectionMode.ForeColor = 'Gray'
 $lblDetectionMode.Location = New-Object System.Drawing.Point(10, 98)
 $lblDetectionMode.Size = New-Object System.Drawing.Size(670, 18)
@@ -1750,7 +1783,7 @@ $grpRemote.Controls.Add($lblDetectionMode)
 
 # --- Grupo: Comandos gerados ---
 $grpCmds = New-Object System.Windows.Forms.GroupBox
-$grpCmds.Text = "4. Linhas geradas (SCCM Deployment Type)"
+$grpCmds.Text = "4. Generated Commands (SCCM Deployment Type)"
 $grpCmds.Location = New-Object System.Drawing.Point(10, 495)
 $grpCmds.Size = New-Object System.Drawing.Size(690, 130)
 $form.Controls.Add($grpCmds)
@@ -1779,21 +1812,21 @@ $txtUninstallCmd.Size = New-Object System.Drawing.Size(670, 20)
 $txtUninstallCmd.ReadOnly = $true
 $grpCmds.Controls.Add($txtUninstallCmd)
 
-# --- Grupo: Deteccao e Criacao ---
+# --- Grupo: Detection e Criacao ---
 $grpTest = New-Object System.Windows.Forms.GroupBox
-$grpTest.Text = "5. Deteccao e Criacao da Aplicacao"
+$grpTest.Text = "5. Detection and Application Creation"
 $grpTest.Location = New-Object System.Drawing.Point(10, 635)
 $grpTest.Size = New-Object System.Drawing.Size(690, 60)
 $form.Controls.Add($grpTest)
 
 $btnTestDetection = New-Object System.Windows.Forms.Button
-$btnTestDetection.Text = "Testar Deteccao"
+$btnTestDetection.Text = "Test Detection"
 $btnTestDetection.Location = New-Object System.Drawing.Point(10, 22)
 $btnTestDetection.Size = New-Object System.Drawing.Size(180, 25)
 $grpTest.Controls.Add($btnTestDetection)
 
 $btnCreate = New-Object System.Windows.Forms.Button
-$btnCreate.Text = "CRIAR APLICACAO NO SCCM"
+$btnCreate.Text = "CREATE APPLICATION IN SCCM"
 $btnCreate.Location = New-Object System.Drawing.Point(205, 20)
 $btnCreate.Size = New-Object System.Drawing.Size(475, 30)
 $btnCreate.BackColor = [System.Drawing.Color]::LightGreen
@@ -1821,18 +1854,18 @@ function Write-Log {
 
 $btnConnect.Add_Click({
     if ([string]::IsNullOrWhiteSpace($txtServer.Text) -or [string]::IsNullOrWhiteSpace($txtSiteCode.Text)) {
-        [System.Windows.Forms.MessageBox]::Show("Informe o Site Server e o Site Code.", "Aviso") | Out-Null
+        [System.Windows.Forms.MessageBox]::Show("Enter the Site Server and Site Code.", "Warning") | Out-Null
         return
     }
     Write-Log "Conectando a $($txtServer.Text) ($($txtSiteCode.Text))..."
     $result = Connect-ToSCCM -SiteServer $txtServer.Text -SiteCode $txtSiteCode.Text
-    if ($result.Sucesso) {
+    if ($result.Success) {
         $script:SiteServer = $txtServer.Text.Trim()
         $script:SiteCode   = $txtSiteCode.Text.Trim()
         $lblConnStatus.Text = $result.Mensagem
         $lblConnStatus.ForeColor = 'Green'
     } else {
-        $lblConnStatus.Text = "Falha: $($result.Mensagem)"
+        $lblConnStatus.Text = "Failed: $($result.Mensagem)"
         $lblConnStatus.ForeColor = 'Red'
     }
     Write-Log $result.Mensagem
@@ -1845,20 +1878,20 @@ $btnPasteFolder.Add_Click({
             $textoLimpo = Get-CleanPath -Path $textoOriginal
             $txtSourceFolder.Text = $textoLimpo
             if ($textoOriginal.Trim() -ne $textoLimpo) {
-                Write-Log "Caminho colado foi limpo automaticamente (aspas/espacos removidos)."
+                Write-Log "Pasted path was cleaned automatically (quotes/spaces removed)."
             }
         }
         else {
-            [System.Windows.Forms.MessageBox]::Show("A area de transferencia nao contem texto.", "Aviso") | Out-Null
+            [System.Windows.Forms.MessageBox]::Show("The clipboard does not contain text.", "Warning") | Out-Null
         }
     }
     catch {
         [System.Windows.Forms.MessageBox]::Show(
-            "Nao foi possivel ler a area de transferencia. Isso costuma acontecer quando o script esta rodando como Administrador " +
+            "Unable to read the clipboard. This usually happens when the script is running as Administrator " +
             "e o texto foi copiado por um programa sem elevacao (bloqueio de UIPI do Windows).`n`n" +
-            "Solucao: rode o script SEM 'Executar como Administrador' (a conexao ao SCCM nao exige elevacao), " +
-            "ou digite o caminho manualmente no campo.",
-            "Erro ao colar",
+            "Solution: run the script WITHOUT 'Run as Administrator' (the SCCM connection does not require elevation), " +
+            "or type the path manually in the field.",
+            "Paste Error",
             'OK', 'Warning'
         ) | Out-Null
     }
@@ -1869,13 +1902,13 @@ $btnBrowse.Add_Click({
     # Truque: usar OpenFileDialog (que tem barra de endereco completa e aceita UNC) para
     # navegar/digitar ate a pasta desejada e depois pegar so o diretorio.
     $dlg = New-Object System.Windows.Forms.OpenFileDialog
-    $dlg.Title = "Navegue ate a pasta de origem (ou cole/digite o caminho UNC na barra 'Nome do arquivo') e clique Abrir"
+    $dlg.Title = "Browse to the source folder (or paste/type the UNC path in the 'File name' box) and click Open"
     $dlg.CheckFileExists = $false
     $dlg.CheckPathExists = $true
     $dlg.ValidateNames = $false
     $dlg.Multiselect = $false
-    $dlg.FileName = "Selecione esta pasta"
-    $dlg.Filter = "Pastas|*.pasta"
+    $dlg.FileName = "Select this folder"
+    $dlg.Filter = "Folders|*.folder"
 
     if ($dlg.ShowDialog() -eq 'OK') {
         $pasta = Split-Path $dlg.FileName -Parent
@@ -1900,7 +1933,7 @@ function Complete-FolderScan {
         $script:UninstallInfo = $Manifest.UninstallInfo
         Write-Log $Manifest.Mensagem
     }
-    elseif ($Acesso -and $Acesso.Sucesso) {
+    elseif ($Acesso -and $Acesso.Success) {
         $script:EffectiveSourcePath = $Acesso.CaminhoEfetivo
         Write-Log $Acesso.Mensagem
         $script:InstallInfo = Get-InstallCommandLine -FolderPath $script:EffectiveSourcePath -Action 'install'
@@ -1910,53 +1943,53 @@ function Complete-FolderScan {
         throw 'Complete-FolderScan recebeu um estado de acesso invalido.'
     }
 
-    $installStatus = if ($script:InstallInfo.Encontrado) { "$($script:InstallInfo.Tipo) ($($script:InstallInfo.Arquivo))" } else { 'NAO ENCONTRADO' }
-    $uninstallStatus = if ($script:UninstallInfo.Encontrado) { "$($script:UninstallInfo.Tipo) ($($script:UninstallInfo.Arquivo))" } else { 'NAO ENCONTRADO' }
-    $lblScanResult.Text = "Instalacao: $installStatus | Desinstalacao: $uninstallStatus"
+    $installStatus = if ($script:InstallInfo.Encontrado) { "$($script:InstallInfo.Tipo) ($($script:InstallInfo.Arquivo))" } else { 'NOT FOUND' }
+    $uninstallStatus = if ($script:UninstallInfo.Encontrado) { "$($script:UninstallInfo.Tipo) ($($script:UninstallInfo.Arquivo))" } else { 'NOT FOUND' }
+    $lblScanResult.Text = "Installation: $installStatus | Uninstallation: $uninstallStatus"
     $txtInstallCmd.Text = if ($script:InstallInfo.Encontrado) { $script:InstallInfo.Comando } else { '' }
     $txtUninstallCmd.Text = if ($script:UninstallInfo.Encontrado) { $script:UninstallInfo.Comando } else { '' }
 
     Write-Log "SOURCE ORIGINAL FIXADO: $($script:OriginalSourcePath)"
     if ($script:InstallInfo.Encontrado -and $script:UninstallInfo.Encontrado) {
-        Write-Log "Scripts encontrados. Install: $($script:InstallInfo.Comando) | Uninstall: $($script:UninstallInfo.Comando)"
+        Write-Log "Scripts found. Install: $($script:InstallInfo.Comando) | Uninstall: $($script:UninstallInfo.Comando)"
     } else {
-        Write-Log 'ATENCAO: install/uninstall nao foram ambos encontrados na raiz da pasta de origem.'
+        Write-Log 'WARNING: both install and uninstall files were not found in the source folder root.'
     }
 }
 
 
 $btnUseInteractiveSession.Add_Click({
     if ([string]::IsNullOrWhiteSpace($txtSourceFolder.Text)) {
-        [System.Windows.Forms.MessageBox]::Show('Informe a pasta de origem primeiro.', 'Aviso') | Out-Null
+        [System.Windows.Forms.MessageBox]::Show('Enter the source folder first.', 'Warning') | Out-Null
         return
     }
 
     $caminhoLimpo = Get-CleanPath -Path $txtSourceFolder.Text
     $txtSourceFolder.Text = $caminhoLimpo
-    Write-Log "Lendo a pasta pela sessao Windows logada, sem copiar o pacote: $caminhoLimpo"
+    Write-Log "Reading the folder through the logged-on Windows session without copying the package: $caminhoLimpo"
     $form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
     try { $manifest = Get-SourceManifestViaInteractiveSession -SourcePath $caminhoLimpo }
     finally { $form.Cursor = [System.Windows.Forms.Cursors]::Default }
 
-    if (-not $manifest.Sucesso) {
-        Write-Log "Falha ao ler pasta via sessao interativa: $($manifest.Mensagem)"
-        [System.Windows.Forms.MessageBox]::Show($manifest.Mensagem, 'Falha ao ler pasta', 'OK', 'Warning') | Out-Null
+    if (-not $manifest.Success) {
+        Write-Log "Failed to read folder through interactive session: $($manifest.Mensagem)"
+        [System.Windows.Forms.MessageBox]::Show($manifest.Mensagem, 'Folder Read Failed', 'OK', 'Warning') | Out-Null
         return
     }
 
-    $lblSourceCredStatus.Text = 'Acesso a pasta: leitura pela sessao Windows logada (sem copia).'
+    $lblSourceCredStatus.Text = 'Folder access: reading through the logged-on Windows session (no copy).'
     $lblSourceCredStatus.ForeColor = 'Green'
     Complete-FolderScan -CaminhoOriginal $caminhoLimpo -Manifest $manifest
 })
 
 
 $btnSourceCred.Add_Click({
-    $cred = Get-Credential -Message "Credenciais com acesso de LEITURA a pasta de origem (ex: sua conta pessoal, se a conta que roda este script - ex: conta de servico do SCCM - nao tiver acesso ao share)"
+    $cred = Get-Credential -Message "Credentials with READ access to the source folder (for example, your personal account if the account running this script, such as an SCCM service account, cannot access the share)"
     if (-not $cred) { return }
     $script:SourceCredential = $cred
-    $lblSourceCredStatus.Text = "Acesso a pasta: usando credencial informada ($($cred.UserName))."
+    $lblSourceCredStatus.Text = "Folder access: using provided credentials ($($cred.UserName))."
     $lblSourceCredStatus.ForeColor = 'Green'
-    Write-Log "Credencial alternativa definida para acesso a pasta de origem ($($cred.UserName))."
+    Write-Log "Alternate credentials set for source folder access ($($cred.UserName))."
 })
 
 $btnClearSourceCred.Add_Click({
@@ -1964,14 +1997,14 @@ $btnClearSourceCred.Add_Click({
     if (Get-PSDrive -Name 'SCCMSRC' -ErrorAction SilentlyContinue) {
         Remove-PSDrive -Name 'SCCMSRC' -Force -ErrorAction SilentlyContinue
     }
-    $lblSourceCredStatus.Text = "Acesso a pasta: usando a conta atual do script."
+    $lblSourceCredStatus.Text = "Folder access: using the current script account."
     $lblSourceCredStatus.ForeColor = 'Gray'
-    Write-Log "Credencial alternativa removida. Voltando a usar a conta atual do script."
+    Write-Log "Alternate credentials removed. Returning to the current script account."
 })
 
 $btnScan.Add_Click({
     if ([string]::IsNullOrWhiteSpace($txtSourceFolder.Text)) {
-        [System.Windows.Forms.MessageBox]::Show("Informe a pasta de origem.", "Aviso") | Out-Null
+        [System.Windows.Forms.MessageBox]::Show("Enter the source folder.", "Warning") | Out-Null
         return
     }
 
@@ -1981,26 +2014,26 @@ $btnScan.Add_Click({
     $caminhoLimpo    = Get-CleanPath -Path $caminhoOriginal
     if ($caminhoOriginal -ne $caminhoLimpo) {
         $txtSourceFolder.Text = $caminhoLimpo
-        Write-Log "Caminho normalizado antes de validar: '$caminhoLimpo'"
+        Write-Log "Path normalized before validation: '$caminhoLimpo'"
     }
 
     if ($script:SourceCredential) {
-        Write-Log "Testando acesso a pasta com a credencial alternativa ($($script:SourceCredential.UserName))..."
+        Write-Log "Testing folder access with alternate credentials ($($script:SourceCredential.UserName))..."
     } else {
-        Write-Log "Testando acesso a pasta com a conta atual do script..."
+        Write-Log "Testing folder access with the current script account..."
     }
 
     $acesso = Resolve-SourceAccess -Path $caminhoLimpo -Credential $script:SourceCredential
 
-    if (-not $acesso.Sucesso) {
-        Write-Log "Falha ao acessar a pasta: $($acesso.Mensagem)"
-        Write-Log "Caminho testado: [`"$caminhoLimpo`"] (tamanho: $($caminhoLimpo.Length) caracteres)"
+    if (-not $acesso.Success) {
+        Write-Log "Failed to access folder: $($acesso.Mensagem)"
+        Write-Log "Tested path: [`"$caminhoLimpo`"] (length: $($caminhoLimpo.Length) characters)"
         [System.Windows.Forms.MessageBox]::Show(
-            "Nao foi possivel acessar este caminho:`n`n$caminhoLimpo`n`n" +
+            "Unable to access this path:`n`n$caminhoLimpo`n`n" +
             "Detalhe: $($acesso.Mensagem)`n`n" +
-            "Se voce nao tem uma credencial para digitar, use o botao " +
-            "'Usar sessao logada (sem senha)' em vez deste.",
-            "Nao foi possivel acessar a pasta",
+            "If you do not have credentials to enter, use the " +
+            "'Use logged-on session (no password)' em vez deste.",
+            "Unable to access folder",
             'OK', 'Warning'
         ) | Out-Null
         return
@@ -2011,11 +2044,11 @@ $btnScan.Add_Click({
 
 $btnConnectRemote.Add_Click({
     if ([string]::IsNullOrWhiteSpace($txtTestMachine.Text)) {
-        [System.Windows.Forms.MessageBox]::Show("Informe o nome da maquina teste.", "Aviso") | Out-Null
+        [System.Windows.Forms.MessageBox]::Show("Enter the test machine name.", "Warning") | Out-Null
         return
     }
     if (-not $script:SiteServer -or -not $script:SiteCode) {
-        [System.Windows.Forms.MessageBox]::Show("Conecte primeiro ao SCCM no grupo 1.", "Aviso") | Out-Null
+        [System.Windows.Forms.MessageBox]::Show("Connect to SCCM first in section 1.", "Warning") | Out-Null
         return
     }
 
@@ -2025,10 +2058,10 @@ $btnConnectRemote.Add_Click({
     $lblRemoteStatus.ForeColor = 'DarkOrange'
     [System.Windows.Forms.Application]::DoEvents()
 
-    Write-Log "Validando maquina teste $computer via SCCM Run Script (sem WinRM/sem credencial da estacao)..."
+    Write-Log "Validating test machine $computer through SCCM Run Script (no WinRM/no workstation credentials)..."
     $result = Connect-RemoteTestMachine -ComputerName $computer
 
-    if ($result.Sucesso) {
+    if ($result.Success) {
         $script:RemoteTestConnected = $true
         $script:RemoteTestComputer  = $computer
         $lblRemoteStatus.Text = "Conectado via SCCM: $computer - execucao remota como SYSTEM."
@@ -2037,7 +2070,7 @@ $btnConnectRemote.Add_Click({
     else {
         $script:RemoteTestConnected = $false
         $script:RemoteTestComputer  = $null
-        $lblRemoteStatus.Text = "Falha via SCCM: $($result.Mensagem)"
+        $lblRemoteStatus.Text = "SCCM failure: $($result.Mensagem)"
         $lblRemoteStatus.ForeColor = 'Red'
 
         if ($result.Mensagem -match 'APROV') {
@@ -2056,24 +2089,24 @@ $btnConnectRemote.Add_Click({
 $btnDisconnectRemote.Add_Click({
     $script:RemoteTestConnected = $false
     $script:RemoteTestComputer  = $null
-    $lblRemoteStatus.Text = "Sem maquina teste conectada pelo SCCM (testes rodarao localmente)."
+    $lblRemoteStatus.Text = "No test machine connected through SCCM (tests will run locally)."
     $lblRemoteStatus.ForeColor = 'Gray'
-    Write-Log "Maquina teste desconectada da sessao logica do App Creator. Nenhuma PSSession/WinRM foi usada."
+    Write-Log "Test machine disconnected from the App Creator logical session. No PSSession/WinRM was used."
 })
 
 $btnDetectRegistry.Add_Click({
     if (-not $script:RemoteTestConnected -or -not $script:RemoteTestComputer) {
-        [System.Windows.Forms.MessageBox]::Show("Conecte primeiro na maquina teste (botao 'Conectar via SCCM / SYSTEM' acima).", "Aviso") | Out-Null
+        [System.Windows.Forms.MessageBox]::Show("Connect to the test machine first using the 'Connect via SCCM / SYSTEM' button above.", "Warning") | Out-Null
         return
     }
 
     if ([string]::IsNullOrWhiteSpace($txtAppName.Text)) {
-        [System.Windows.Forms.MessageBox]::Show("Informe somente o Nome da Aplicacao. A versao sera descoberta automaticamente no registro da maquina teste.", "Aviso") | Out-Null
+        [System.Windows.Forms.MessageBox]::Show("Enter only the Application Name. The version will be discovered automatically from the test machine registry.", "Warning") | Out-Null
         return
     }
 
     $appSearchName = $txtAppName.Text.Trim()
-    Write-Log "[REGISTRY DIRECT] Procurando '$appSearchName' diretamente no registro de $($script:RemoteTestComputer) via WMI/DCOM. SEM Run Script, SEM payload."
+    Write-Log "[REGISTRY DIRECT] Searching for '$appSearchName' directly in the registry of $($script:RemoteTestComputer) via WMI/DCOM. NO Run Script, NO payload."
     $btnDetectRegistry.Enabled = $false
     $form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
 
@@ -2089,11 +2122,11 @@ $btnDetectRegistry.Add_Click({
     }
 
     if ($erro) {
-        Write-Log "[REGISTRY DIRECT] ERRO: $erro"
+        Write-Log "[REGISTRY DIRECT] ERROR: $erro"
         [System.Windows.Forms.MessageBox]::Show(
-            "Nao foi possivel ler o registro remoto de $($script:RemoteTestComputer).`n`n$erro`n`n" +
-            "Esta consulta usa WMI/DCOM StdRegProv e NAO usa Run Script/payload.",
-            "Erro ao consultar registro remoto", 'OK', 'Error') | Out-Null
+            "Unable to read the remote registry of $($script:RemoteTestComputer).`n`n$erro`n`n" +
+            "This query uses WMI/DCOM StdRegProv and does NOT use Run Script/payload.",
+            "Remote Registry Query Error", 'OK', 'Error') | Out-Null
         return
     }
 
@@ -2103,11 +2136,11 @@ $btnDetectRegistry.Add_Click({
     if (-not $selecionado) {
         $script:DetectedRegistryApp = $null
         $script:RegistryUninstallCommand = $null
-        Write-Log "[REGISTRY DIRECT] Nenhuma entrada valida com DisplayName/DisplayVersion encontrada."
+        Write-Log "[REGISTRY DIRECT] No valid entry with DisplayName/DisplayVersion was found."
         [System.Windows.Forms.MessageBox]::Show(
-            "Nao encontrei '$appSearchName' no registro da maquina teste.`n`n" +
+            "Could not find '$appSearchName' in the test machine registry.`n`n" +
             "Foram verificadas HKLM 64-bit, WOW6432Node e as hives de usuario carregadas diretamente via WMI/DCOM.",
-            "Aplicacao nao encontrada", 'OK', 'Warning') | Out-Null
+            "Application Not Found", 'OK', 'Warning') | Out-Null
         return
     }
 
@@ -2123,41 +2156,42 @@ $btnDetectRegistry.Add_Click({
         -QuietUninstallString ([string]$selecionado.QuietUninstallString) `
         -RegistryKeyName ([string]$selecionado.RegistryKeyName)
 
+    # A linha de uninstall descoberta no registro e somente informativa.
+    # O Deployment Type deve executar o wrapper uninstall.bat/uninstall.ps1 da source,
+    # pois esse wrapper contem a logica operacional ja validada (timeout/exit codes).
+    $txtUninstallCmd.Text = if ($script:UninstallInfo -and $script:UninstallInfo.Encontrado) { $script:UninstallInfo.Comando } else { '' }
     if (-not [string]::IsNullOrWhiteSpace($script:RegistryUninstallCommand)) {
-        $txtUninstallCmd.Text = $script:RegistryUninstallCommand
-        Write-Log "[REGISTRY DIRECT] Uninstall silencioso encontrado/sugerido: $($script:RegistryUninstallCommand)"
-    }
-    else {
-        # Mantem o uninstall da pasta source como fallback conhecido.
-        $txtUninstallCmd.Text = if ($script:UninstallInfo -and $script:UninstallInfo.Encontrado) { $script:UninstallInfo.Comando } else { '' }
-        Write-Log "[REGISTRY DIRECT] Nenhum uninstall silencioso confiavel encontrado. Mantendo uninstall da pasta source."
+        Write-Log "[REGISTRY DIRECT] Registry uninstall command found (informational only; it will NOT be used by the Deployment Type): $($script:RegistryUninstallCommand)"
+    } else {
+        Write-Log "[REGISTRY DIRECT] No additional silent uninstall command was found in the registry. The source wrapper will be used."
     }
 
     $script:DetectionMode = 'Registry'
     $script:DetectionFilePath = $null
-    $lblDetectionMode.Text = "Registro DIRETO: $($selecionado.DisplayName) >= $($selecionado.DisplayVersion)"
+    $lblDetectionMode.Text = "DIRECT REGISTRY: $($selecionado.DisplayName) >= $($selecionado.DisplayVersion)"
     $lblDetectionMode.ForeColor = 'DarkGreen'
     $script:DetectionText = New-DetectionScriptText -DisplayNamePattern ([string]$selecionado.DisplayName) -MinVersion ([string]$selecionado.DisplayVersion)
 
-    Write-Log "[REGISTRY DIRECT] ENCONTRADO: DisplayName='$($selecionado.DisplayName)' | DisplayVersion='$($selecionado.DisplayVersion)' | Publisher='$($selecionado.Publisher)' | Escopo='$($selecionado.Escopo)'"
-    Write-Log "[REGISTRY DIRECT] CHAVE EXATA PARA DETECCAO: $($selecionado.RegistryPath)"
+    Write-Log "[REGISTRY DIRECT] FOUND: DisplayName='$($selecionado.DisplayName)' | DisplayVersion='$($selecionado.DisplayVersion)' | Publisher='$($selecionado.Publisher)' | Scope='$($selecionado.Escopo)'"
+    Write-Log "[REGISTRY DIRECT] EXACT DETECTION KEY: $($selecionado.RegistryPath)"
     Write-Log "[REGISTRY DIRECT] UninstallString='$($selecionado.UninstallString)'"
     if ($selecionado.QuietUninstallString) { Write-Log "[REGISTRY DIRECT] QuietUninstallString='$($selecionado.QuietUninstallString)'" }
 
-    $uninstallShow = if ($script:RegistryUninstallCommand) { $script:RegistryUninstallCommand } else { '(fallback: uninstall da pasta source)' }
+    $uninstallShow = if ($script:RegistryUninstallCommand) { $script:RegistryUninstallCommand } else { '(fallback: uninstall from source folder)' }
     [System.Windows.Forms.MessageBox]::Show(
-        "Aplicacao encontrada diretamente no registro remoto.`n`n" +
+        "Application found directly in the remote registry.`n`n" +
         "DisplayName: $($selecionado.DisplayName)`n" +
-        "Versao: $($selecionado.DisplayVersion)`n" +
+        "Version: $($selecionado.DisplayVersion)`n" +
         "Escopo: $($selecionado.Escopo)`n" +
-        "Uninstall silencioso: $uninstallShow`n`n" +
-        "Nao foi usado Run Script nem payload.",
-        "Deteccao automatica concluida", 'OK', 'Information') | Out-Null
+        "Registry uninstall command (informational): $uninstallShow`n" +
+        "Deployment Type usara: $($script:UninstallInfo.Comando)`n`n" +
+        "No Run Script or payload was used.",
+        "Automatic Detection Completed", 'OK', 'Information') | Out-Null
 })
 
 $btnDetectFile.Add_Click({
     if (-not $script:RemoteTestConnected -or -not $script:RemoteTestComputer) {
-        [System.Windows.Forms.MessageBox]::Show("Conecte primeiro na maquina teste (botao 'Conectar via SCCM / SYSTEM' acima).", "Aviso") | Out-Null
+        [System.Windows.Forms.MessageBox]::Show("Connect to the test machine first using the 'Connect via SCCM / SYSTEM' button above.", "Warning") | Out-Null
         return
     }
 
@@ -2166,24 +2200,24 @@ $btnDetectFile.Add_Click({
     } else { "*.exe" }
 
     $pattern = [Microsoft.VisualBasic.Interaction]::InputBox(
-        "Padrao do nome do arquivo executavel a procurar (aceita curinga *).`n`n" +
-        "A busca padrao cobre: Program Files, Program Files (x86) e ProgramData.`n" +
-        "Use isso quando o app NAO aparecer no registro (Detectar no Registro) nem nas " +
-        "pastas padrao - por exemplo instaladores que nao registram nada no Windows.",
-        "Buscar executavel na maquina teste",
+        "Executable file name pattern to search for (wildcard * supported).`n`n" +
+        "The default search covers Program Files, Program Files (x86), and ProgramData.`n" +
+        "Use this when the app does NOT appear in the registry or other detection sources. " +
+        "default folders - for example, installers that do not register anything in Windows.",
+        "Search executable on test machine",
         $sugestaoNome
     )
     if ([string]::IsNullOrWhiteSpace($pattern)) { return }
 
     $extraRoots = [Microsoft.VisualBasic.Interaction]::InputBox(
-        "Pastas adicionais para procurar tambem (opcional), separadas por ponto-e-virgula.`n" +
+        "Additional folders to search as well (optional), separated by semicolons.`n" +
         "Exemplo: D:\Apps;C:\CapTalk`n`n" +
-        "Deixe em branco para procurar so nas pastas padrao.",
-        "Pastas adicionais (opcional)",
+        "Leave blank to search only the default folders.",
+        "Additional Folders (optional)",
         ""
     )
 
-    Write-Log "Procurando '$pattern' em $($script:RemoteTestComputer) (Program Files, Program Files (x86), ProgramData$(if ($extraRoots) { ' + pastas extras: ' + $extraRoots }))... isso pode demorar ate alguns minutos."
+    Write-Log "Searching for '$pattern' on $($script:RemoteTestComputer) (Program Files, Program Files (x86), ProgramData$(if ($extraRoots) { ' + extra folders: ' + $extraRoots }))... this may take a few minutes."
     $btnDetectFile.Enabled = $false
     $form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
 
@@ -2201,19 +2235,19 @@ $btnDetectFile.Add_Click({
     }
 
     if ($erro) {
-        Write-Log "Erro na busca por arquivo: $erro"
-        [System.Windows.Forms.MessageBox]::Show($erro, "Erro na busca por arquivo", 'OK', 'Error') | Out-Null
+        Write-Log "File search error: $erro"
+        [System.Windows.Forms.MessageBox]::Show($erro, "File Search Error", 'OK', 'Error') | Out-Null
         return
     }
 
     $raw = $status.ScriptOutput
     if ([string]::IsNullOrWhiteSpace($raw)) {
-        Write-Log "Nenhum arquivo encontrado com o padrao '$pattern' nas pastas pesquisadas."
+        Write-Log "No file found matching pattern '$pattern' in the searched folders."
         [System.Windows.Forms.MessageBox]::Show(
-            "Nenhum arquivo encontrado com o padrao '$pattern' em Program Files / Program Files (x86) / ProgramData" +
+            "No file found matching pattern '$pattern' in Program Files / Program Files (x86) / ProgramData" +
             $(if ($extraRoots) { " nem em: $extraRoots" } else { "" }) + ".`n`n" +
-            "Tente um padrao mais amplo (ex: '*.exe' sem prefixo) ou informe uma pasta adicional onde o app foi instalado.",
-            "Nenhum resultado",
+            "Try a broader pattern (for example, '*.exe' without a prefix) or provide an additional folder where the app is installed.",
+            "No Results",
             'OK', 'Warning'
         ) | Out-Null
         return
@@ -2223,20 +2257,20 @@ $btnDetectFile.Add_Click({
         $json = $raw | ConvertFrom-Json -ErrorAction Stop
     }
     catch {
-        Write-Log "Falha ao interpretar retorno da busca por arquivo: $($_.Exception.Message)"
-        [System.Windows.Forms.MessageBox]::Show("Resposta invalida da maquina teste.`n`n$raw", "Erro", 'OK', 'Error') | Out-Null
+        Write-Log "Failed to parse file search response: $($_.Exception.Message)"
+        [System.Windows.Forms.MessageBox]::Show("Invalid response from the test machine.`n`n$raw", "Error", 'OK', 'Error') | Out-Null
         return
     }
 
     if ($json -isnot [System.Array]) { $json = @($json) }
 
     if ($json.Count -eq 0) {
-        Write-Log "Nenhum arquivo encontrado com o padrao '$pattern'."
-        [System.Windows.Forms.MessageBox]::Show("Nenhum arquivo encontrado com o padrao '$pattern'.", "Aviso") | Out-Null
+        Write-Log "No file found matching pattern '$pattern'."
+        [System.Windows.Forms.MessageBox]::Show("No file found matching pattern '$pattern'.", "Warning") | Out-Null
         return
     }
 
-    Write-Log "Encontrados $($json.Count) arquivo(s) com o padrao '$pattern'. Abrindo lista para selecao..."
+    Write-Log "Found $($json.Count) file(s) matching pattern '$pattern'. Opening selection list..."
 
     # Reaproveita o mesmo picker usado para o registro, mapeando FullName/FileVersion/LastWriteTime
     # nas mesmas 3 colunas (com titulos customizados para fazer sentido nesse contexto).
@@ -2249,11 +2283,11 @@ $btnDetectFile.Add_Click({
     }
 
     $selecionado = Show-InstalledSoftwarePicker -Items $itemsParaPicker -InitialFilter '' `
-        -WindowTitle "Selecione o executavel encontrado na maquina teste" `
-        -ColumnHeaders @("Caminho completo", "Versao do arquivo", "Modificado em")
+        -WindowTitle "Select the executable found on the test machine" `
+        -ColumnHeaders @("Full Path", "File Version", "Modified")
 
     if (-not $selecionado) {
-        Write-Log "Selecao de arquivo cancelada pelo usuario."
+        Write-Log "File selection canceled by the user."
         return
     }
 
@@ -2264,17 +2298,17 @@ $btnDetectFile.Add_Click({
         $txtVersion.Text = $selecionado.DisplayVersion
     }
 
-    $lblDetectionMode.Text = "Modo de deteccao: ARQUIVO -> $($script:DetectionFilePath)"
+    $lblDetectionMode.Text = "Detection mode: FILE -> $($script:DetectionFilePath)"
     $lblDetectionMode.ForeColor = 'DarkGoldenrod'
 
-    Write-Log "Deteccao por ARQUIVO selecionada: '$($script:DetectionFilePath)' (versao do arquivo: $($selecionado.DisplayVersion))"
+    Write-Log "FILE detection selected: '$($script:DetectionFilePath)' (file version: $($selecionado.DisplayVersion))"
 
     [System.Windows.Forms.MessageBox]::Show(
-        "A deteccao vai usar a EXISTENCIA (e a versao do arquivo, se disponivel) deste executavel:`n`n" +
+        "Detection will use the EXISTENCE of this executable (and its file version, if available):`n`n" +
         "$($script:DetectionFilePath)`n`n" +
-        "Isso substitui a deteccao por registro para esta aplicacao. Para voltar a usar o registro, " +
-        "clique em 'Voltar p/ Registro'.",
-        "Deteccao por arquivo selecionada",
+        "This replaces registry detection for this application. To return to registry detection, " +
+        "click 'Back to Automatic Registry'.",
+        "File Detection Selected",
         'OK', 'Information'
     ) | Out-Null
 })
@@ -2286,15 +2320,15 @@ $btnClearFileDetection.Add_Click({
     $script:DetectionText = $null
     $txtDetectPattern.Text = ''
     $txtVersion.Text = ''
-    $lblDetectionMode.Text = "Modo de deteccao: Registro automatico pelo Nome da Aplicacao."
+    $lblDetectionMode.Text = "Detection mode: automatic Registry by Application Name."
     $lblDetectionMode.ForeColor = 'Gray'
-    Write-Log "Modo de deteccao voltou para Registro automatico pelo Nome da Aplicacao."
+    Write-Log "Detection mode returned to automatic Registry by Application Name."
 })
 
 function Build-CurrentDetectionText {
     <#
-        Registro: usa EXCLUSIVAMENTE a entrada que foi descoberta na maquina
-        teste a partir do Nome da Aplicacao. O campo Versao e apenas o reflexo
+        Registry: usa EXCLUSIVAMENTE a entrada que foi descoberta na maquina
+        teste a partir do Nome da Aplicacao. O campo Version e apenas o reflexo
         da DisplayVersion encontrada; ele nao e criterio de descoberta.
     #>
     if ($script:DetectionMode -eq 'File' -and $script:DetectionFilePath) {
@@ -2303,8 +2337,8 @@ function Build-CurrentDetectionText {
 
     if (-not $script:DetectedRegistryApp) {
         [System.Windows.Forms.MessageBox]::Show(
-            "Primeiro clique em 'Gerar Deteccao pelo Nome da Aplicacao'.`n`nA ferramenta precisa consultar a maquina teste e descobrir o DisplayName/DisplayVersion reais no registro.",
-            "Deteccao ainda nao gerada", 'OK', 'Warning') | Out-Null
+            "First click 'Generate Detection by Application Name'.`n`nThe tool needs to query the test machine and discover the actual DisplayName/DisplayVersion in the registry.",
+            "Detection Not Generated Yet", 'OK', 'Warning') | Out-Null
         return $null
     }
 
@@ -2343,30 +2377,30 @@ $btnTestDetection.Add_Click({
             if ($script:DetectionMode -eq 'File' -and $script:DetectionFilePath) {
                 # Mantem o fluxo de arquivo existente; esta correcao e especifica
                 # para deteccao por REGISTRO, que nao deve usar Run Script/payload.
-                Write-Log "Testando deteccao por ARQUIVO em $($script:RemoteTestComputer)."
+                Write-Log "Testing FILE detection on $($script:RemoteTestComputer)."
                 $raw = Invoke-RemoteDetection -ComputerName $script:RemoteTestComputer -FilePath $script:DetectionFilePath -MinVersion $txtVersion.Text
                 $obj = $null
                 try { $obj = $raw | ConvertFrom-Json -ErrorAction Stop } catch {}
-                if ($obj -and $obj.Result -eq 'Instalado') {
-                    Write-Log "RESULTADO: Instalado (deteccao por arquivo OK)"
-                    [System.Windows.Forms.MessageBox]::Show("DETECTADO`n`nArquivo: $($script:DetectionFilePath)`nVersao minima: $($txtVersion.Text)","Teste de Deteccao",'OK','Information') | Out-Null
+                if ($obj -and $obj.Result -eq 'Installed') {
+                    Write-Log "RESULT: Installed (file detection OK)"
+                    [System.Windows.Forms.MessageBox]::Show("DETECTED`n`nFile: $($script:DetectionFilePath)`nMinimum version: $($txtVersion.Text)","Detection Test",'OK','Information') | Out-Null
                 } else {
-                    Write-Log "RESULTADO: Nao detectado por arquivo."
-                    [System.Windows.Forms.MessageBox]::Show("NAO DETECTADO`n`nArquivo: $($script:DetectionFilePath)","Teste de Deteccao",'OK','Warning') | Out-Null
+                    Write-Log "RESULT: Not detected by file."
+                    [System.Windows.Forms.MessageBox]::Show("NOT DETECTED`n`nFile: $($script:DetectionFilePath)","Detection Test",'OK','Warning') | Out-Null
                 }
                 return
             }
 
             if (-not $script:DetectedRegistryApp) {
-                [System.Windows.Forms.MessageBox]::Show("Primeiro gere a deteccao automaticamente pelo Nome da Aplicacao.", "Aviso") | Out-Null
+                [System.Windows.Forms.MessageBox]::Show("Generate detection automatically by Application Name first.", "Warning") | Out-Null
                 return
             }
 
             $realName    = [string]$script:DetectedRegistryApp.DisplayName
             $realVersion = [string]$script:DetectedRegistryApp.DisplayVersion
 
-            Write-Log "[DETECTION DIRECT] Testando diretamente o registro de $($script:RemoteTestComputer). SEM Run Script, SEM payload."
-            Write-Log "[DETECTION DIRECT] Esperado: DisplayName='$realName' | versao >= '$realVersion'"
+            Write-Log "[DETECTION DIRECT] Testing registry directly on $($script:RemoteTestComputer). NO Run Script, NO payload."
+            Write-Log "[DETECTION DIRECT] Expected: DisplayName='$realName' | version >= '$realVersion'"
 
             $matches = @(Get-InstalledProgramsRemote -ComputerName $script:RemoteTestComputer -Filter $realName)
             $expectedNorm = Get-NormalizedSoftwareName $realName
@@ -2387,96 +2421,99 @@ $btnTestDetection.Add_Click({
 
             if ($detected) {
                 $found = $best.Item
-                Write-Log "[DETECTION DIRECT] RESULTADO: DETECTADO | DisplayName='$($found.DisplayName)' | DisplayVersion='$($found.DisplayVersion)' | Escopo='$($found.Escopo)'"
+                Write-Log "[DETECTION DIRECT] RESULT: DETECTED | DisplayName='$($found.DisplayName)' | DisplayVersion='$($found.DisplayVersion)' | Scope='$($found.Escopo)'"
                 [System.Windows.Forms.MessageBox]::Show(
-                    "DETECTADO`n`nAplicacao: $($found.DisplayName)`nVersao instalada: $($found.DisplayVersion)`nVersao minima: $realVersion`nRegistro: $($found.Escopo)`n`nMetodo: Registry remoto direto (sem Run Script/payload).",
-                    "Teste de Deteccao - OK", 'OK', 'Information') | Out-Null
+                    "DETECTED`n`nApplication: $($found.DisplayName)`nVersion instalada: $($found.DisplayVersion)`nMinimum version: $realVersion`nRegistry: $($found.Escopo)`n`nMethod: Direct remote Registry (no Run Script/payload).",
+                    "Detection Test - OK", 'OK', 'Information') | Out-Null
             }
             else {
-                $foundText = if ($best) { "$($best.Item.DisplayName) $($best.Item.DisplayVersion)" } elseif ($matches.Count -gt 0) { ($matches | ForEach-Object { "$($_.DisplayName) $($_.DisplayVersion)" }) -join "`n" } else { 'Nenhuma correspondencia encontrada.' }
-                Write-Log "[DETECTION DIRECT] RESULTADO: NAO DETECTADO. Encontrado: $foundText"
+                $foundText = if ($best) { "$($best.Item.DisplayName) $($best.Item.DisplayVersion)" } elseif ($matches.Count -gt 0) { ($matches | ForEach-Object { "$($_.DisplayName) $($_.DisplayVersion)" }) -join "`n" } else { 'No matching entry found.' }
+                Write-Log "[DETECTION DIRECT] RESULT: NOT DETECTED. Found: $foundText"
                 [System.Windows.Forms.MessageBox]::Show(
-                    "NAO DETECTADO`n`nEsperado: $realName >= $realVersion`n`nEncontrado:`n$foundText`n`nMetodo: Registry remoto direto (sem Run Script/payload).",
-                    "Teste de Deteccao", 'OK', 'Warning') | Out-Null
+                    "NOT DETECTED`n`nExpected: $realName >= $realVersion`n`nFound:`n$foundText`n`nMethod: Direct remote Registry (no Run Script/payload).",
+                    "Detection Test", 'OK', 'Warning') | Out-Null
             }
         }
         else {
             $script:DetectionText = Build-CurrentDetectionText
             if (-not $script:DetectionText) { return }
-            Write-Log "Sem maquina teste conectada - executando script de deteccao LOCALMENTE neste computador ($env:COMPUTERNAME)."
+            Write-Log "No test machine connected - running the Detection script LOCALLY on this computer ($env:COMPUTERNAME)."
             $resultado = Invoke-Expression $script:DetectionText
-            if (($resultado | Out-String).Trim() -eq 'Instalado') {
-                Write-Log "RESULTADO: Instalado (deteccao OK)"
-                [System.Windows.Forms.MessageBox]::Show("DETECTADO localmente.","Teste de Deteccao",'OK','Information') | Out-Null
+            if (($resultado | Out-String).Trim() -eq 'Installed') {
+                Write-Log "RESULT: Installed (detection OK)"
+                [System.Windows.Forms.MessageBox]::Show("DETECTED locally.","Detection Test",'OK','Information') | Out-Null
             } else {
-                Write-Log "RESULTADO: Nao detectado. Retorno: $(($resultado | Out-String).Trim())"
-                [System.Windows.Forms.MessageBox]::Show("NAO DETECTADO localmente.","Teste de Deteccao",'OK','Warning') | Out-Null
+                Write-Log "RESULT: Not detected. Return: $(($resultado | Out-String).Trim())"
+                [System.Windows.Forms.MessageBox]::Show("NOT DETECTED locally.","Detection Test",'OK','Warning') | Out-Null
             }
         }
     }
     catch {
-        Write-Log "Erro ao rodar deteccao: $($_.Exception.Message)"
-        [System.Windows.Forms.MessageBox]::Show("Erro no teste de deteccao:`n`n$($_.Exception.Message)","Erro",'OK','Error') | Out-Null
+        Write-Log "Detection execution error: $($_.Exception.Message)"
+        [System.Windows.Forms.MessageBox]::Show("Detection test error:`n`n$($_.Exception.Message)","Error",'OK','Error') | Out-Null
     }
 })
 
 $btnCreate.Add_Click({
     if ([string]::IsNullOrWhiteSpace($txtAppName.Text) -or [string]::IsNullOrWhiteSpace($txtSourceFolder.Text)) {
-        [System.Windows.Forms.MessageBox]::Show("Preencha Nome da Aplicacao e Pasta de Origem.", "Aviso") | Out-Null
+        [System.Windows.Forms.MessageBox]::Show("Enter Application Name and Source Folder.", "Warning") | Out-Null
         return
     }
     if ($script:DetectionMode -eq 'Registry' -and -not $script:DetectedRegistryApp) {
-        [System.Windows.Forms.MessageBox]::Show("Antes de criar a aplicacao, clique em 'Gerar Deteccao pelo Nome da Aplicacao' para descobrir a versao real no registro da maquina teste.", "Aviso") | Out-Null
+        [System.Windows.Forms.MessageBox]::Show("Before creating the application, click 'Generate Detection by Application Name' to discover the actual version in the test machine registry.", "Warning") | Out-Null
         return
     }
     if (-not $script:InstallInfo -or -not $script:InstallInfo.Encontrado -or
         -not $script:UninstallInfo -or -not $script:UninstallInfo.Encontrado -or
         -not $script:OriginalSourcePath) {
-        [System.Windows.Forms.MessageBox]::Show("Escaneie a pasta e confirme que install/uninstall foram encontrados.", "Aviso") | Out-Null
+        [System.Windows.Forms.MessageBox]::Show("Scan the folder and confirm that install/uninstall files were found.", "Warning") | Out-Null
         return
     }
 
     $sourceNow = Get-CleanPath -Path $txtSourceFolder.Text
     if ($sourceNow -ne $script:OriginalSourcePath) {
-        [System.Windows.Forms.MessageBox]::Show("A Pasta de Origem foi alterada depois do ultimo scan. Escaneie novamente antes de criar a aplicacao.", "Source alterado", 'OK', 'Warning') | Out-Null
+        [System.Windows.Forms.MessageBox]::Show("The Source Folder changed after the last scan. Scan it again before creating the application.", "Source Changed", 'OK', 'Warning') | Out-Null
         return
     }
 
     $script:DetectionText = Build-CurrentDetectionText
     if (-not $script:DetectionText) { return }
 
-    $descricaoDeteccao = if ($script:DetectionMode -eq 'File') {
-        "Arquivo: $($script:DetectionFilePath)"
+    $descricaoDetection = if ($script:DetectionMode -eq 'File') {
+        "File: $($script:DetectionFilePath)"
     } else {
-        "Registro EXATO: $($script:DetectedRegistryApp.RegistryPath) | DisplayName='$($script:DetectedRegistryApp.DisplayName)' | DisplayVersion >= $($script:DetectedRegistryApp.DisplayVersion)"
+        "EXACT Registry: $($script:DetectedRegistryApp.RegistryPath) | DisplayName='$($script:DetectedRegistryApp.DisplayName)' | DisplayVersion >= $($script:DetectedRegistryApp.DisplayVersion)"
     }
 
     $confirm = [System.Windows.Forms.MessageBox]::Show(
-        "Confirma a criacao da aplicacao '$($txtAppName.Text)' no SCCM?`n`n" +
-        "Content Location (UNC real usado pelo SCCM):`n$($script:OriginalSourcePath)`n`n" +
-        "Metodo de deteccao: $descricaoDeteccao`n`n" +
-        "Uninstall command: $(if ($script:RegistryUninstallCommand) { $script:RegistryUninstallCommand } else { $script:UninstallInfo.Comando })",
-        "Confirmar",
+        "Confirm creation of application '$($txtAppName.Text)' in SCCM?`n`n" +
+        "Content Location (actual UNC used by SCCM):`n$($script:OriginalSourcePath)`n`n" +
+        "Detection method: $descricaoDetection`n`n" +
+        "Install command: $($script:InstallInfo.Comando)`n" +
+        "Uninstall command: $($script:UninstallInfo.Comando)",
+        "Confirm",
         [System.Windows.Forms.MessageBoxButtons]::YesNo
     )
     if ($confirm -ne 'Yes') { return }
 
-    Write-Log "Criando aplicacao '$($txtAppName.Text)' no SCCM (ContentLocation: $($script:OriginalSourcePath))..."
+    Write-Log "Creating application '$($txtAppName.Text)' in SCCM (ContentLocation: $($script:OriginalSourcePath))..."
+    Write-Log "Deployment Type wrappers LOCKED: Install='$($script:InstallInfo.Comando)' | Uninstall='$($script:UninstallInfo.Comando)'"
+    Write-Log "PowerShell Detection Method prepared: $($script:DetectionText.Length) character(s)."
     $result = New-SCCMScriptApplication `
         -AppName $txtAppName.Text `
         -Publisher $txtPublisher.Text `
         -Version $txtVersion.Text `
         -SourceFolder $script:OriginalSourcePath `
         -InstallCommand $script:InstallInfo.Comando `
-        -UninstallCommand $(if ($script:RegistryUninstallCommand) { $script:RegistryUninstallCommand } else { $script:UninstallInfo.Comando }) `
+        -UninstallCommand $script:UninstallInfo.Comando `
         -DetectionScript $script:DetectionText
 
-    if ($result.Sucesso) {
+    if ($result.Success) {
         Write-Log $result.Mensagem
-        [System.Windows.Forms.MessageBox]::Show($result.Mensagem, "Sucesso") | Out-Null
+        [System.Windows.Forms.MessageBox]::Show($result.Mensagem, "Success") | Out-Null
     } else {
-        Write-Log "ERRO: $($result.Mensagem)"
-        [System.Windows.Forms.MessageBox]::Show($result.Mensagem, "Erro", 'OK', 'Error') | Out-Null
+        Write-Log "ERROR: $($result.Mensagem)"
+        [System.Windows.Forms.MessageBox]::Show($result.Mensagem, "Error", 'OK', 'Error') | Out-Null
     }
 })
 
@@ -2486,5 +2523,5 @@ $form.Add_FormClosing({
     }
 })
 
-Write-Log "Ferramenta iniciada. Conecte ao SCCM e preencha os dados da aplicacao."
+Write-Log "Tool started. Connect to SCCM and enter the application details."
 [void]$form.ShowDialog()
