@@ -1448,7 +1448,9 @@ function New-SCCMScriptApplication {
 
         New-CMApplication -Name $AppName -Publisher $Publisher -SoftwareVersion $Version -ErrorAction Stop | Out-Null
 
-        # Cria primeiro o Deployment Type com os comandos/content.
+        Write-Log "[CREATE] Application created."
+        Write-Log "[CREATE] Creating Deployment Type..."
+
         Add-CMScriptDeploymentType `
             -ApplicationName $AppName `
             -DeploymentTypeName $deploymentTypeName `
@@ -1460,30 +1462,23 @@ function New-SCCMScriptApplication {
             -UserInteractionMode Hidden `
             -ErrorAction Stop | Out-Null
 
-        # IMPORTANTE: aplica o Detection Method numa segunda etapa explicita.
-        # Isso evita o caso observado em que Add-CMScriptDeploymentType cria o DT,
-        # mas o script de deteccao nao fica persistido no objeto do ConfigMgr.
-        $dt = Get-CMDeploymentType -ApplicationName $AppName -DeploymentTypeName $deploymentTypeName -ErrorAction Stop
-        if (-not $dt) {
-            throw "Deployment Type '$deploymentTypeName' was created but could not be retrieved to configure the Detection Method."
-        }
+        Write-Log "[CREATE] Deployment Type created."
+        Write-Log "[CREATE] Applying Detection Method..."
 
         Set-CMScriptDeploymentType `
-            -InputObject $dt `
+            -ApplicationName $AppName `
+            -DeploymentTypeName $deploymentTypeName `
             -ScriptLanguage PowerShell `
             -ScriptText $DetectionScript `
             -Force `
             -ErrorAction Stop | Out-Null
 
-        # Rele o Deployment Type depois do Set para garantir que o SCCM aceitou a alteracao.
-        $dtCheck = Get-CMDeploymentType -ApplicationName $AppName -DeploymentTypeName $deploymentTypeName -ErrorAction Stop
-        if (-not $dtCheck) {
-            throw "Failed to read the Deployment Type after saving the Detection Method."
-        }
+        Write-Log "[CREATE] Detection Method applied."
+        Write-Log "[CREATE] COMPLETE."
 
         return [PSCustomObject]@{
             Success = $true
-            Mensagem = "Application '$AppName' created with Deployment Type and PowerShell Detection Method configured in SCCM."
+            Mensagem = "Application '$AppName' created with Deployment Type and PowerShell Detection Method configured in Configuration Manager."
         }
     }
     catch {
@@ -1510,7 +1505,7 @@ $script:DetectionMode     = 'Registry'  # 'Registry' ou 'File'
 $script:DetectionFilePath = $null       # caminho do executavel, quando DetectionMode = 'File'
 $script:DetectedRegistryApp = $null      # entrada real descoberta automaticamente na maquina teste
 $script:RegistryUninstallCommand = $null  # uninstall silencioso vindo do registro; source e fallback
-$script:BuildId = '2026.08.26-SCCM-CREATOR-FINAL7-CREATIONFIX'
+$script:BuildId = '2026.08.26-SCCM-CREATOR-FINAL8-STABLE-DETECTION'
 
 # ----------------------------------------------------------------------------
 # GUI
