@@ -1449,7 +1449,8 @@ function New-SCCMScriptApplication {
         New-CMApplication -Name $AppName -Publisher $Publisher -SoftwareVersion $Version -ErrorAction Stop | Out-Null
 
         Write-Log "[CREATE] Application created."
-        Write-Log "[CREATE] Creating Deployment Type..."
+        Write-Log "[CREATE] Creating Deployment Type with Detection Method in one pass..."
+        Write-Log "[CREATE] Detection script length: $($DetectionScript.Length) characters."
 
         Add-CMScriptDeploymentType `
             -ApplicationName $AppName `
@@ -1460,20 +1461,11 @@ function New-SCCMScriptApplication {
             -InstallationBehaviorType InstallForSystem `
             -LogonRequirementType WhetherOrNotUserLoggedOn `
             -UserInteractionMode Hidden `
-            -ErrorAction Stop | Out-Null
-
-        Write-Log "[CREATE] Deployment Type created."
-        Write-Log "[CREATE] Applying Detection Method..."
-
-        Set-CMScriptDeploymentType `
-            -ApplicationName $AppName `
-            -DeploymentTypeName $deploymentTypeName `
             -ScriptLanguage PowerShell `
             -ScriptText $DetectionScript `
-            -Force `
             -ErrorAction Stop | Out-Null
 
-        Write-Log "[CREATE] Detection Method applied."
+        Write-Log "[CREATE] Deployment Type + Detection Method created."
         Write-Log "[CREATE] COMPLETE."
 
         return [PSCustomObject]@{
@@ -1505,7 +1497,7 @@ $script:DetectionMode     = 'Registry'  # 'Registry' ou 'File'
 $script:DetectionFilePath = $null       # caminho do executavel, quando DetectionMode = 'File'
 $script:DetectedRegistryApp = $null      # entrada real descoberta automaticamente na maquina teste
 $script:RegistryUninstallCommand = $null  # uninstall silencioso vindo do registro; source e fallback
-$script:BuildId = '2026.08.26-SCCM-CREATOR-FINAL8-STABLE-DETECTION'
+$script:BuildId = '2026.08.26-SCCM-CREATOR-FINAL9-ONEPASS-DETECTION'
 
 # ----------------------------------------------------------------------------
 # GUI
